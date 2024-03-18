@@ -5,6 +5,16 @@ if (POLICY CMP0072)
   cmake_policy (SET CMP0072 NEW)
 endif(POLICY CMP0072)
 
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.14.0")
+	cmake_policy(SET CMP0083 NEW)
+	include(CheckPIESupported)
+	check_pie_supported()
+endif()
+
+include(CheckPIESupported)
+check_pie_supported()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 find_package(X11 REQUIRED)
 find_package(OpenGL REQUIRED)
 
@@ -39,6 +49,5 @@ if(MSVC)
 else(MSVC)
   target_compile_options(openxr-playground PRIVATE -pedantic -Wall -Wextra -Wno-unused-parameter)
 endif(MSVC)
-
 
 install(TARGETS openxr-playground RUNTIME DESTINATION bin)
