@@ -1,6 +1,6 @@
 # OpenXR C Playground
 
-Note: Currently this application only supports Linux/X11.
+Note: Currently this application only supports the XrGraphicsBindingOpenGLXlibKHR (glx) graphics binding.
 
 This example exercises many areas of the OpenXR API.
 Some parts of the API are abstracted, though the abstractions are intentionally kept simple for simple editing.
