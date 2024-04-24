@@ -27,9 +27,9 @@
 
 #define XR_USE_PLATFORM_XLIB
 #define XR_USE_GRAPHICS_API_OPENGL
-#include "openxr_headers/openxr.h"
-#include "openxr_headers/openxr_platform.h"
-#include "openxr_headers/openxr_reflection.h"
+#include "external/openxr_headers/openxr.h"
+#include "external/openxr_headers/openxr_platform.h"
+#include "external/openxr_headers/openxr_reflection.h"
 
 #else
 #error Only Linux/XLib supported for now
@@ -67,7 +67,7 @@ Example of how to use expansion macros to make an enum-to-string function:
 	if (val != 0x7FFFFFFF)                                                                           \
 		printf("\t\t%s\n", #name);
 #define XR_ENUM_PRINT_VALS(enumType)                                                               \
-	void XrPrintEnum_##enumType()                                                                    \
+	void XrPrintEnum_##enumType(void)                                                                \
 	{                                                                                                \
 		XR_LIST_ENUM_##enumType(XR_PRINT_ENUM)                                                         \
 	}
@@ -2991,7 +2991,7 @@ main(int argc, char** argv)
 
 // A small header with functions for OpenGL math
 #define MATH_3D_IMPLEMENTATION
-#include "math_3d.h"
+#include "external/math_3d/math_3d.h"
 
 static SDL_Window* desktop_window;
 static SDL_GLContext gl_context;
