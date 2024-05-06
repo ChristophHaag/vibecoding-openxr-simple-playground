@@ -3604,7 +3604,7 @@ render_frame(struct ApplicationState* app,
 			     XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
 
 			if (hand_location_valid) {
-				XrVector3f scale = {.x = .05f, .y = .05f, .z = .2f};
+				XrVector3f scale = {.x = .02f, .y = .02f, .z = .2f};
 				render_block(&hand_locations[hand].pose.position, &hand_locations[hand].pose.orientation,
 				             &scale, gl_renderer->modelLoc);
 			}
