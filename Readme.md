@@ -1,13 +1,40 @@
 # OpenXR C Playground
 
-Note: Currently this application only supports the XrGraphicsBindingOpenGLXlibKHR (glx) graphics binding.
-
 This example exercises many areas of the OpenXR API.
 Some parts of the API are abstracted, though the abstractions are intentionally kept simple for simple editing.
 
 For a simpler, more straightforward example, see
 https://gitlab.freedesktop.org/monado/demos/openxr-simple-example
 
+# Building
+
+## Linux
+
+Install the appropriate packages for sdl2, openxr loader, glx, xlib.
+
+    cmake -G Ninja -B build
+    ninja -C build
+
+## Windows
+
+### msvc + vcpkg
+
+Make sure to git clone --recursive or git submodule update --init.
+
+Install visual studio (express) or Build Tools for Visual Studio. Open a developer powershell and run
+
+    .\vcpkg\bootstrap-vcpkg.bat
+    .\vcpkg\vcpkg.exe install sdl2:x64-windows openxr-loader:x64-windows
+    cmake -GNinja -Bbuild -DVCPKG=ON
+    ninja -C build
+
+### clang + source build
+
+This script assumes that git, clang (llvm), cmake and ninja are installed system wide (e.g. with scoop). It builds all dependencies directly with cmake.
+
+For most people the msvc + vcpkg build is the better option.
+
+    .\make_simple_playground.ps1
 
 # Running
 

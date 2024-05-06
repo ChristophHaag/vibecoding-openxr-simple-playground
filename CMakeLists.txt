@@ -1,27 +1,40 @@
 cmake_minimum_required(VERSION 3.0)
+
+option(VCPKG "Use vcpkg for dependencies" OFF)
+
+if (VCPKG)
+  MESSAGE("Using vcpkg in ./vcpkg")
+  set(CMAKE_TOOLCHAIN_FILE ./vcpkg/scripts/buildsystems/vcpkg.cmake)
+endif()
+
 project(openxr-example)
 
 if (POLICY CMP0072)
   cmake_policy (SET CMP0072 NEW)
 endif(POLICY CMP0072)
 
-if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.14.0")
-	cmake_policy(SET CMP0083 NEW)
-	include(CheckPIESupported)
-	check_pie_supported()
-endif()
+IF (WIN32)
+  SET(EXTRA_INCLUDES "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/external/GL")
+  # SET(EXTRA_LIBS "-lopengl32")
 
-include(CheckPIESupported)
-check_pie_supported()
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+  # TODO: visual studio build getopt?
+  # find_library(GETOPT_LIB getopt)
+  # SET(EXTRA_LIBS ${GETOPT_LIB})
+ENDIF()
 
-find_package(X11 REQUIRED)
+add_executable(openxr-playground main.c ${EXTRA_SOURCES})
+
 find_package(OpenGL REQUIRED)
 
-INCLUDE(FindPkgConfig)
-PKG_SEARCH_MODULE(SDL2 REQUIRED sdl2)
+IF (WIN32)
+	find_package(SDL2 REQUIRED)
+ELSE()
+	INCLUDE(FindPkgConfig)
+	PKG_SEARCH_MODULE(SDL2 REQUIRED sdl2)
 
-add_executable(openxr-playground main.c)
+  find_package(X11 REQUIRED)
+  SET(LINUX_LIBS "Xrandr ${X11_LIBRARIES}" m)
+ENDIF()
 
 include(FindPkgConfig)
 pkg_search_module(OPENXR openxr)
@@ -41,11 +54,12 @@ else()
   target_link_libraries(openxr-playground PRIVATE OpenXR::openxr_loader)
 endif()
 
-target_link_libraries(openxr-playground PRIVATE Xrandr ${X11_LIBRARIES} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES} m)
-target_include_directories(openxr-playground PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_libraries(openxr-playground PRIVATE ${LINUX_LIBS} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES} ${EXTRA_LIBS})
+target_include_directories(openxr-playground PRIVATE ${SDL2_INCLUDE_DIRS} ${SDL2_INCLUDE_DIR} ${EXTRA_INCLUDES})
 
 if(MSVC)
-  target_compile_options(openxr-playground PRIVATE /W4 /WX)
+  target_compile_options(openxr-playground PRIVATE /D_CRT_SECURE_NO_WARNINGS /W4 /WX /wd4100 /wd4244 /wd4127 /wd4201 /wd4245 /wd4305 /wd4477)
+  target_link_options(openxr-playground PRIVATE /STACK:10485760)
 else(MSVC)
   target_compile_options(openxr-playground PRIVATE -pedantic -Wall -Wextra -Wno-unused-parameter)
 endif(MSVC)
