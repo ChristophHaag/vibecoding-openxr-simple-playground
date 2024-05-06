@@ -978,6 +978,7 @@ struct OpenXRState
 	XrView* views;
 
 	XrViewState view_state;
+	XrFrameState frameState;
 };
 
 struct action_t
@@ -2618,9 +2619,9 @@ main(int argc, char** argv)
 		frame_count++;
 
 		// --- Wait for our turn to do head-pose dependent computation and render a frame
-		XrFrameState frameState = {.type = XR_TYPE_FRAME_STATE, .next = NULL};
+		app->oxr.frameState = (XrFrameState){.type = XR_TYPE_FRAME_STATE, .next = NULL};
 		XrFrameWaitInfo frameWaitInfo = {.type = XR_TYPE_FRAME_WAIT_INFO, .next = NULL};
-		result = xrWaitFrame(app->oxr.session, &frameWaitInfo, &frameState);
+		result = xrWaitFrame(app->oxr.session, &frameWaitInfo, &app->oxr.frameState);
 		if (!xr_check(app->oxr.instance, result, "xrWaitFrame() was not successful, exiting..."))
 			break;
 
@@ -2631,7 +2632,7 @@ main(int argc, char** argv)
 		                                     .next = NULL,
 		                                     .viewConfigurationType =
 		                                         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-		                                     .displayTime = frameState.predictedDisplayTime,
+		                                     .displayTime = app->oxr.frameState.predictedDisplayTime,
 		                                     .space = app->oxr.play_space};
 
 		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
@@ -2660,12 +2661,12 @@ main(int argc, char** argv)
 
 		for (int i = 0; i < HAND_COUNT; i++) {
 			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->hand_pose_action, i,
-			                     hand_paths, app->oxr.play_space, frameState.predictedDisplayTime,
-			                     app->query_hand_velocities))
+			                     hand_paths, app->oxr.play_space,
+			                     app->oxr.frameState.predictedDisplayTime, app->query_hand_velocities))
 				printf("Failed to get hand pose action data for hand %d\n", i);
 
 			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->aim_action, i, hand_paths,
-			                     app->oxr.play_space, frameState.predictedDisplayTime,
+			                     app->oxr.play_space, app->oxr.frameState.predictedDisplayTime,
 			                     app->query_hand_velocities))
 				printf("Failed to get aim pose action data for hand %d\n", i);
 
@@ -2711,8 +2712,9 @@ main(int argc, char** argv)
 			}
 
 			if (hand_tracking_ext->system_supported) {
-				get_hand_tracking(app->oxr.instance, app->oxr.play_space, frameState.predictedDisplayTime,
-				                  app->query_joint_velocities, hand_tracking_ext, i);
+				get_hand_tracking(app->oxr.instance, app->oxr.play_space,
+				                  app->oxr.frameState.predictedDisplayTime, app->query_joint_velocities,
+				                  hand_tracking_ext, i);
 			}
 		};
 
@@ -2729,7 +2731,7 @@ main(int argc, char** argv)
 			if (plane_detection_ext->state == XR_PLANE_DETECTION_STATE_DONE_EXT) {
 				XrPlaneDetectorGetInfoEXT get_info = {
 				    .type = XR_TYPE_PLANE_DETECTOR_GET_INFO_EXT,
-				    .time = frameState.predictedDisplayTime,
+				    .time = app->oxr.frameState.predictedDisplayTime,
 				    .baseSpace = app->oxr.play_space,
 				};
 
@@ -2834,7 +2836,7 @@ main(int argc, char** argv)
 				XrPlaneDetectorBeginInfoEXT begin_info = {
 				    .type = XR_TYPE_PLANE_DETECTOR_BEGIN_INFO_EXT,
 				    .baseSpace = app->oxr.play_space,
-				    .time = frameState.predictedDisplayTime,
+				    .time = app->oxr.frameState.predictedDisplayTime,
 				    .orientationCount = 0,
 				    .semanticTypeCount = 0,
 				    .maxPlanes = 1000,
@@ -2853,7 +2855,7 @@ main(int argc, char** argv)
 
 		if (app->cube.enabled) {
 			if (app->cube.pos_ts != 0) {
-				XrDuration diff_ns = frameState.predictedDisplayTime - app->cube.pos_ts;
+				XrDuration diff_ns = app->oxr.frameState.predictedDisplayTime - app->cube.pos_ts;
 				float diff_s = (double)diff_ns * 1. / 1000. * 1. / 1000. * 1. / 1000.;
 				XrVector3f next_pos = {
 				    .x = app->cube.current_pos.x += app->cube.velocity.x * diff_s,
@@ -2881,7 +2883,7 @@ main(int argc, char** argv)
 				// app->cube.current_pos.z);
 			}
 
-			app->cube.pos_ts = frameState.predictedDisplayTime;
+			app->cube.pos_ts = app->oxr.frameState.predictedDisplayTime;
 		}
 
 		// --- Begin frame
@@ -2917,7 +2919,7 @@ main(int argc, char** argv)
 		// render projection layer (once per view) and fill projection_views with the result
 
 
-		render_frame(app, &app->gl_renderer, frameState.predictedDisplayTime,
+		render_frame(app, &app->gl_renderer, app->oxr.frameState.predictedDisplayTime,
 		             app->hand_pose_action.pose_locations, hand_tracking_ext,
 		             depth_ext->base.supported);
 
@@ -2943,7 +2945,8 @@ main(int argc, char** argv)
 		if (!acquire_swapchain(app->oxr.instance, &app->quad_layer.swapchain, 0, &quad_index))
 			break;
 
-		render_quad(&app->gl_renderer, &app->quad_layer, quad_index, frameState.predictedDisplayTime);
+		render_quad(&app->gl_renderer, &app->quad_layer, quad_index,
+		            app->oxr.frameState.predictedDisplayTime);
 
 		result = xrReleaseSwapchainImage(app->quad_layer.swapchain.swapchains[0], &release_info);
 		if (!xr_check(app->oxr.instance, result, "failed to release swapchain image!"))
@@ -2995,7 +2998,7 @@ main(int argc, char** argv)
 		}
 
 		XrFrameEndInfo frameEndInfo = {.type = XR_TYPE_FRAME_END_INFO,
-		                               .displayTime = frameState.predictedDisplayTime,
+		                               .displayTime = app->oxr.frameState.predictedDisplayTime,
 		                               .layerCount = submitted_layer_count,
 		                               .layers = submitted_layers,
 		                               .environmentBlendMode = app->oxr.blend_mode,
