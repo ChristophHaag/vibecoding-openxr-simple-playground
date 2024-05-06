@@ -7,6 +7,7 @@
  * @author Christoph Haag <christoph.haag@collabora.com>
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <getopt.h>
@@ -139,6 +140,8 @@ init_gl_funcs()
 #include "external/openxr_headers/openxr.h"
 #include "external/openxr_headers/openxr_platform.h"
 #include "external/openxr_headers/openxr_reflection.h"
+
+#include "external/openxr_headers/XR_MNDX_xdev_space.h"
 
 /*
 This file contains expansion macros (X Macros) for OpenXR enumerations and structures.
@@ -590,6 +593,10 @@ print_system_properties(XrSystemProperties* system_properties)
 			XrSystemHandTrackingPropertiesEXT* ht = (XrSystemHandTrackingPropertiesEXT*)next;
 			printf("\tHand Tracking       : %d\n", ht->supportsHandTracking);
 		}
+		if (next->type == XR_TYPE_SYSTEM_XDEV_SPACE_PROPERTIES_MNDX) {
+			XrSystemXDevSpacePropertiesMNDX* xd = (XrSystemXDevSpacePropertiesMNDX*)next;
+			printf("\txdev space          : %d\n", xd->supportsXDevSpace);
+		}
 		next = next->next;
 	}
 }
@@ -944,6 +951,259 @@ init_hand_interaction_t(struct base_extension_t** out_base)
 	return true;
 }
 
+// wrapper struct to store everything related to one xdev
+struct xdev_space_element
+{
+	XrXDevIdMNDX xid;
+	XrXDevPropertiesMNDX xprops;
+	XrSpace space;
+	struct xdev_space_element* next;
+};
+void
+destroy_xdev_space(XrInstance instance, struct xdev_space_element** element)
+{
+	if ((*element)->space != XR_NULL_HANDLE) {
+
+		XrResult result = xrDestroySpace((*element)->space);
+
+		// can't really do anything about it
+		xr_check(NULL, result, "Failed to destroy xdev space");
+	}
+
+	free(*element);
+	*element = NULL;
+}
+void
+destroy_xdev_space_list(XrInstance instance, struct xdev_space_element** list)
+{
+	XrResult result = XR_SUCCESS;
+	struct xdev_space_element* element = *list;
+
+	while (element) {
+		struct xdev_space_element* next = element->next;
+
+		destroy_xdev_space(instance, &element);
+
+		element = next;
+	}
+	*list = NULL;
+}
+bool
+try_move(struct xdev_space_element** old_list,
+         struct xdev_space_element** new_list,
+         XrXDevPropertiesMNDX* prop)
+{
+	// remove the element from old_list, if any, and cache it in removed_element
+	struct xdev_space_element* removed_element = NULL;
+	{
+		struct xdev_space_element* prev = NULL;
+		struct xdev_space_element* current = *old_list;
+		while (current) {
+			// serial is supposed to be globally unique in monado
+			if (strcmp(current->xprops.serial, prop->serial) == 0) {
+				printf("Keeping xdev %s [%s] alive", prop->name, prop->serial);
+				if (prev == NULL) {
+					*old_list = current->next;
+					removed_element = current;
+				} else {
+					prev->next = current->next;
+					removed_element = current;
+					break;
+				}
+			}
+		}
+	}
+
+	// if an element has been removed from old_list, add it to new_list and return true to indicate
+	// the element was found
+	if (removed_element) {
+		// prepend for simplicity
+		removed_element->next = *new_list;
+		*new_list = removed_element;
+		return true;
+	}
+
+	return false;
+}
+
+struct xdev_space_t
+{
+	struct base_extension_t base;
+
+	PFN_xrCreateXDevListMNDX xrCreateXDevListMNDX;
+	PFN_xrGetXDevListGenerationNumberMNDX xrGetXDevListGenerationNumberMNDX;
+	PFN_xrEnumerateXDevsMNDX xrEnumerateXDevsMNDX;
+	PFN_xrGetXDevPropertiesMNDX xrGetXDevPropertiesMNDX;
+	PFN_xrDestroyXDevListMNDX xrDestroyXDevListMNDX;
+	PFN_xrCreateXDevSpaceMNDX xrCreateXDevSpaceMNDX;
+
+	struct xdev_space_element* xdev_space_list;
+
+	// only need to check for new/disappeared xdevs when the generation id changes
+	uint64_t last_generation_id;
+
+	// true if both the runtime supports the extension and the current system (hardware) in use
+	// supports it too.
+	bool system_supported;
+};
+static XrResult
+init_xdev_space_fp(XrInstance instance, struct base_extension_t* base)
+{
+	struct xdev_space_t* xdev_space = (struct xdev_space_t*)base;
+	LOAD_OR_RETURN(xrCreateXDevListMNDX, xdev_space)
+	LOAD_OR_RETURN(xrGetXDevListGenerationNumberMNDX, xdev_space)
+	LOAD_OR_RETURN(xrEnumerateXDevsMNDX, xdev_space)
+	LOAD_OR_RETURN(xrGetXDevPropertiesMNDX, xdev_space)
+	LOAD_OR_RETURN(xrDestroyXDevListMNDX, xdev_space)
+	LOAD_OR_RETURN(xrCreateXDevSpaceMNDX, xdev_space)
+	return XR_SUCCESS;
+}
+static bool
+init_xdev_space_t(struct base_extension_t** out_base)
+{
+	*out_base = malloc(sizeof(struct xdev_space_t));
+
+	(*out_base)->ext_name_string = XR_MNDX_XDEV_SPACE_EXTENSION_NAME;
+	(*out_base)->init_fp = init_xdev_space_fp;
+
+	((struct xdev_space_t*)*out_base)->xdev_space_list = NULL;
+	((struct xdev_space_t*)*out_base)->last_generation_id = 0;
+	((struct xdev_space_t*)*out_base)->system_supported = false;
+
+	return true;
+}
+bool
+cleanup_update_xdev_spaces(XrInstance instance,
+                           XrSession session,
+                           struct xdev_space_t* xdev_space,
+                           XrXDevListMNDX* list,
+                           XrXDevIdMNDX** xdevs,
+                           struct xdev_space_element** old_list)
+{
+	XrResult result = XR_SUCCESS;
+
+	// everything we knew from last time has been moved to the new list, so we can destroy everything
+	// that is still on the old list
+	destroy_xdev_space_list(instance, old_list);
+
+	if (*list != XR_NULL_HANDLE) {
+		result = xdev_space->xrDestroyXDevListMNDX(*list);
+		xr_check(instance, result, "Failed to destroy xdev space list"); // we don't care
+		*list = XR_NULL_HANDLE;
+		// printf("Destroyed xdev list\n");
+	}
+
+	free(*xdevs);
+	*xdevs = NULL;
+	return true;
+}
+bool
+update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* xdev_space)
+{
+	XrResult result = XR_SUCCESS;
+	XrXDevIdMNDX* xdevs = NULL;
+	struct xdev_space_element* old_list = NULL;
+
+	XrXDevListMNDX list = XR_NULL_HANDLE;
+	XrCreateXDevListInfoMNDX create_info = {
+	    .type = XR_TYPE_CREATE_XDEV_LIST_INFO_MNDX,
+	};
+	result = xdev_space->xrCreateXDevListMNDX(session, &create_info, &list);
+	if (!xr_check(instance, result, "Failed to create xdev list")) {
+		return false;
+	}
+
+	uint64_t generation = 0;
+	result = xdev_space->xrGetXDevListGenerationNumberMNDX(list, &generation);
+	if (!xr_check(NULL, result, "Failed to get xdev list generation")) {
+		return false;
+	}
+
+	// no new or disappeared xdevs, nothing to do
+	if (generation == xdev_space->last_generation_id) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		// printf("xdev list generation unchanged: %lu\n", generation);
+		return true;
+	}
+
+	printf("xdev list generation changed: %lu -> %lu\n", xdev_space->last_generation_id, generation);
+
+	uint32_t count = 0;
+	result = xdev_space->xrEnumerateXDevsMNDX(list, 0, &count, NULL);
+	if (!xr_check(instance, result, "Failed to enumerate xdev list capacity")) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		return false;
+	}
+
+	assert(count > 0);
+
+	xdevs = malloc(sizeof(XrXDevIdMNDX) * count);
+
+	result = xdev_space->xrEnumerateXDevsMNDX(list, count, &count, xdevs);
+	if (!xr_check(instance, result, "Failed to enumerate xdev list")) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		return false;
+	}
+
+	printf("enumerated %d devices\n", count);
+
+	// crude: if we recognize an xdev id from the previous generation, just pick it out of the old
+	// list into the new one to avoid recreating XrSpace etc.
+	old_list = xdev_space->xdev_space_list;
+	xdev_space->xdev_space_list = NULL;
+
+	for (uint32_t i = 0; i < count; i++) {
+		XrGetXDevInfoMNDX info = {
+		    .type = XR_TYPE_GET_XDEV_INFO_MNDX,
+		    .id = xdevs[i],
+		};
+		XrXDevPropertiesMNDX prop = {
+		    .type = XR_TYPE_XDEV_PROPERTIES_MNDX,
+		};
+
+		result = xdev_space->xrGetXDevPropertiesMNDX(list, &info, &prop);
+		if (!xr_check(instance, result, "Failed to get xdev id %lu properties", xdevs[i])) {
+			cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+			return false;
+		}
+
+		if (try_move(&old_list, &xdev_space->xdev_space_list, &prop)) {
+			// we already know this xdev, we moved it to to the new list and don't need to do anything
+			// else
+			continue;
+		}
+
+		// we did not find this xdev in the old list, meaning we haven't seen it before
+		struct xdev_space_element* element = malloc(sizeof(struct xdev_space_element));
+		element->xid = info.id;
+		element->xprops = prop;
+		printf("\tnew xdev: %s [%s], can create space: %d\n", prop.name, prop.serial,
+		       prop.canCreateSpace);
+		if (prop.canCreateSpace) {
+			XrCreateXDevSpaceInfoMNDX space_create_info = {
+			    .type = XR_TYPE_CREATE_XDEV_SPACE_INFO_MNDX,
+			    .xdevList = list,
+			    .offset = identity_pose,
+			    .id = info.id,
+			};
+			result = xdev_space->xrCreateXDevSpaceMNDX(session, &space_create_info, &element->space);
+			if (!xr_check(instance, result, "Failed to create xdev space")) {
+				cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+				return false;
+			}
+		}
+		element->next = xdev_space->xdev_space_list;
+		xdev_space->xdev_space_list = element;
+	}
+
+	xdev_space->last_generation_id = generation;
+
+	cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+
+	return true;
+}
+
+
 static init_ext_struct ext_init_funcs[] = {
     &init_opengl_t,           //
     &init_hand_tracking_t,    //
@@ -951,6 +1211,7 @@ static init_ext_struct ext_init_funcs[] = {
     &init_refresh_rate_t,     //
     &init_plane_detection_t,  //
     &init_hand_interaction_t, //
+    &init_xdev_space_t,       //
 };
 
 struct OpenXRState
@@ -1842,12 +2103,29 @@ main(int argc, char** argv)
 			system_props.next = &ht;
 		}
 
+
+		struct xdev_space_t* xdev_ext =
+		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
+
+		XrSystemXDevSpacePropertiesMNDX xd = {
+		    .type = XR_TYPE_SYSTEM_XDEV_SPACE_PROPERTIES_MNDX,
+		    .next = system_props.next,
+		};
+
+		if (xdev_ext->base.supported) {
+			system_props.next = &xd;
+		}
+
 		result = xrGetSystemProperties(app->oxr.instance, app->oxr.system_id, &system_props);
 		if (!xr_check(app->oxr.instance, result, "Failed to get System properties"))
 			return 1;
 
 		if (ht_ext->base.supported) {
 			ht_ext->system_supported = ht.supportsHandTracking;
+		}
+
+		if (xdev_ext->base.supported) {
+			xdev_ext->system_supported = xd.supportsXDevSpace;
 		}
 
 		print_system_properties(&system_props);
@@ -2419,6 +2697,7 @@ main(int argc, char** argv)
 		return 1;
 	}
 
+
 	XrSessionActionSetsAttachInfo actionset_attach_info = {
 	    .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO,
 	    .next = NULL,
@@ -2627,6 +2906,16 @@ main(int argc, char** argv)
 		if (!xr_check(app->oxr.instance, result, "xrWaitFrame() was not successful, exiting..."))
 			break;
 
+
+		// Maybe updating new/disappeared xdevs is not necessary every frame. The XrSpaces are located
+		// independently.
+		struct xdev_space_t* xdev_ext =
+		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
+		if (xdev_ext && xdev_ext->base.supported && xdev_ext->system_supported) {
+			if (!update_xdev_spaces(app->oxr.instance, app->oxr.session, xdev_ext)) {
+				return 1;
+			}
+		}
 
 
 		// --- Create projection matrices and view matrices for each eye
@@ -3644,6 +3933,32 @@ render_frame(struct ApplicationState* app,
 				if ((vel->velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0) {
 					visualize_velocity(&hand_locations[hand].pose, &vel->linearVelocity,
 					                   &vel->angularVelocity, gl_renderer->modelLoc, 0.005);
+				}
+			}
+		}
+
+		struct xdev_space_t* xdev_ext =
+		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
+		if (xdev_ext && xdev_ext->base.supported && xdev_ext->system_supported) {
+			glUniform4f(gl_renderer->colorLoc, 1.0, 1.0, 0.5, 1.0);
+			for (struct xdev_space_element* element = xdev_ext->xdev_space_list; element;
+			     element = element->next) {
+				if (element->space != XR_NULL_HANDLE) {
+					XrSpaceLocation l = {.type = XR_TYPE_SPACE_LOCATION};
+					xrLocateSpace(element->space, app->oxr.play_space,
+					              app->oxr.frameState.predictedDisplayTime, &l);
+
+					XrVector3f scale = {.x = .05f, .y = .05f, .z = .05f};
+					bool l_valid =
+					    //(l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
+					    (l.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+					/*
+					printf("%s [%s] l valid %d %f %f %f\n", element->xprops.name, element->xprops.serial,
+					       l_valid, l.pose.position.x, l.pose.position.y, l.pose.position.z);
+					*/
+					if (l_valid) {
+						render_block(&l.pose.position, &l.pose.orientation, &scale, gl_renderer->modelLoc);
+					}
 				}
 			}
 		}

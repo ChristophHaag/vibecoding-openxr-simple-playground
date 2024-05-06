@@ -55,7 +55,8 @@ else()
 endif()
 
 target_link_libraries(openxr-playground PRIVATE ${LINUX_LIBS} ${OPENGL_LIBRARIES} ${SDL2_LIBRARIES} ${EXTRA_LIBS})
-target_include_directories(openxr-playground PRIVATE ${SDL2_INCLUDE_DIRS} ${SDL2_INCLUDE_DIR} ${EXTRA_INCLUDES})
+# ${CMAKE_SOURCE_DIR}/external/openxr_headers for external/openxr_headers/XR_MNDX_xdev_space.h ->  openxr_extension_helpers.h
+target_include_directories(openxr-playground PRIVATE ${SDL2_INCLUDE_DIRS} ${SDL2_INCLUDE_DIR} ${EXTRA_INCLUDES} ${CMAKE_SOURCE_DIR}/external/openxr_headers)
 
 if(MSVC)
   target_compile_options(openxr-playground PRIVATE /D_CRT_SECURE_NO_WARNINGS /W4 /WX /wd4100 /wd4244 /wd4127 /wd4201 /wd4245 /wd4305 /wd4477)
