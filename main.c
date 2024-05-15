@@ -1773,7 +1773,7 @@ main(int argc, char** argv)
 	            .engineName = "",
 	            .applicationVersion = 1,
 	            .engineVersion = 0,
-	            .apiVersion = XR_CURRENT_API_VERSION,
+	            .apiVersion = XR_MAKE_VERSION(1, 0, XR_VERSION_PATCH(XR_CURRENT_API_VERSION)),
 	        },
 	};
 	strncpy(instance_create_info.applicationInfo.applicationName, "OpenXR OpenGL Example",
