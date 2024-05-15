@@ -587,7 +587,7 @@ print_system_properties(XrSystemProperties* system_properties)
 	const XrBaseInStructure* next = system_properties->next;
 	while (next) {
 		if (next->type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT) {
-			XrSystemHandTrackingPropertiesEXT* ht = system_properties->next;
+			XrSystemHandTrackingPropertiesEXT* ht = (XrSystemHandTrackingPropertiesEXT*)next;
 			printf("\tHand Tracking       : %d\n", ht->supportsHandTracking);
 		}
 		next = next->next;
@@ -1834,8 +1834,10 @@ main(int argc, char** argv)
 		struct hand_tracking_t* ht_ext =
 		    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
 
-		XrSystemHandTrackingPropertiesEXT ht = {.type = XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT,
-		                                        .next = NULL};
+		XrSystemHandTrackingPropertiesEXT ht = {
+		    .type = XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT,
+		    .next = system_props.next,
+		};
 		if (ht_ext->base.supported) {
 			system_props.next = &ht;
 		}
