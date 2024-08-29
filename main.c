@@ -1289,20 +1289,25 @@ struct ApplicationState
 
 	bool is_steamvr;
 
-	// use optional XrSpaceVelocity in xrLocateSpace for controllers and visualize linear velocity
-	bool query_hand_velocities;
+	struct
+	{
+		// use optional XrSpaceVelocity in xrLocateHandJointsEXT and visualize linear velocity
+		bool query_joint_velocities;
 
-	bool render_floor;
+		// use optional XrSpaceVelocity in xrLocateSpace for controllers and visualize linear velocity
+		bool query_hand_velocities;
 
-	bool pose_test;
-	uint64_t busy_loops;
+		bool render_floor;
+
+		bool pose_test;
+		uint64_t busy_loops;
+
+		bool xdev_space;
+	} args;
 
 	// array of view_count indices
 	uint32_t* acquired_color;
 	uint32_t* acquired_depth;
-
-	// use optional XrSpaceVelocity in xrLocateHandJointsEXT and visualize linear velocity
-	bool query_joint_velocities;
 
 	struct
 	{
@@ -1840,6 +1845,7 @@ static struct option long_options[] = {{"help", no_argument, 0, 'h'},
                                        {"floor", no_argument, 0, 'z'},
                                        {"posetest", no_argument, 0, 't'},
                                        {"busyloops", required_argument, 0, 'l'},
+                                       {"xdev_space", no_argument, 0, 'x'},
                                        {0, 0, 0, 0}};
 void
 parse_opts(int argc, char** argv, struct ApplicationState* app)
@@ -1847,7 +1853,7 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 	while (1) {
 		int c;
 		int option_index = 0;
-		c = getopt_long(argc, argv, "tjhf:b:s:c:l:p", long_options, &option_index);
+		c = getopt_long(argc, argv, "tjhxf:b:s:c:l:p", long_options, &option_index);
 		if (c == -1)
 			break;
 
@@ -1884,6 +1890,9 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 			printf(
 			    "\t-l|--busyloops <iterations> (Loop iterations to keep the GPU busy. Only useful for "
 			    "testing.)\n");
+			printf(
+			    "\t-x|--xdev_space.               (Renders yellow cubes at each supported xdev via "
+			    "XR_MNDX_xdev_space)\n");
 			exit(0);
 
 		case 'b':
@@ -1923,26 +1932,31 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 
 		case 'j':
 			printf("ARG: Enabling joint velocities\n");
-			app->query_joint_velocities = true;
+			app->args.query_joint_velocities = true;
 			break;
 
 		case 'v':
 			printf("ARG: Enabling hand velocities\n");
-			app->query_hand_velocities = true;
+			app->args.query_hand_velocities = true;
 			break;
 
 		case 'z':
 			printf("ARG: Enabling floor\n");
-			app->render_floor = true;
+			app->args.render_floor = true;
 			break;
 		case 't':
 			printf("ARG: Enabling pose test\n");
-			app->pose_test = true;
+			app->args.pose_test = true;
 			break;
 
 		case 'l':
-			app->busy_loops = atoi(optarg);
-			printf("ARG: Enabling busy loop test with %d iterations\n", app->busy_loops);
+			app->args.busy_loops = atoi(optarg);
+			printf("ARG: Enabling busy loop test with %lu iterations\n", app->args.busy_loops);
+			break;
+
+		case 'x':
+			app->args.xdev_space = true;
+			printf("ARG: Enabling xdev_space\n");
 			break;
 
 		default: abort();
@@ -1975,8 +1989,8 @@ main(int argc, char** argv)
 	            .near_z = 0.01f,
 	            .far_z = 100.0f,
 	        },
-	    .query_joint_velocities = false,
-	    .query_hand_velocities = false,
+	    .args.query_joint_velocities = false,
+	    .args.query_hand_velocities = false,
 
 	};
 
@@ -2112,7 +2126,7 @@ main(int argc, char** argv)
 		    .next = system_props.next,
 		};
 
-		if (xdev_ext->base.supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported) {
 			system_props.next = &xd;
 		}
 
@@ -2124,7 +2138,7 @@ main(int argc, char** argv)
 			ht_ext->system_supported = ht.supportsHandTracking;
 		}
 
-		if (xdev_ext->base.supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported) {
 			xdev_ext->system_supported = xd.supportsXDevSpace;
 		}
 
@@ -2911,7 +2925,8 @@ main(int argc, char** argv)
 		// independently.
 		struct xdev_space_t* xdev_ext =
 		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
-		if (xdev_ext && xdev_ext->base.supported && xdev_ext->system_supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported &&
+		    xdev_ext->system_supported) {
 			if (!update_xdev_spaces(app->oxr.instance, app->oxr.session, xdev_ext)) {
 				return 1;
 			}
@@ -2953,12 +2968,13 @@ main(int argc, char** argv)
 		for (int i = 0; i < HAND_COUNT; i++) {
 			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->hand_pose_action, i,
 			                     hand_paths, app->oxr.play_space,
-			                     app->oxr.frameState.predictedDisplayTime, app->query_hand_velocities))
+			                     app->oxr.frameState.predictedDisplayTime,
+			                     app->args.query_hand_velocities))
 				printf("Failed to get hand pose action data for hand %d\n", i);
 
 			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->aim_action, i, hand_paths,
 			                     app->oxr.play_space, app->oxr.frameState.predictedDisplayTime,
-			                     app->query_hand_velocities))
+			                     app->args.query_hand_velocities))
 				printf("Failed to get aim pose action data for hand %d\n", i);
 
 
@@ -3004,8 +3020,8 @@ main(int argc, char** argv)
 
 			if (hand_tracking_ext->system_supported) {
 				get_hand_tracking(app->oxr.instance, app->oxr.play_space,
-				                  app->oxr.frameState.predictedDisplayTime, app->query_joint_velocities,
-				                  hand_tracking_ext, i);
+				                  app->oxr.frameState.predictedDisplayTime,
+				                  app->args.query_joint_velocities, hand_tracking_ext, i);
 			}
 		};
 
@@ -3773,9 +3789,9 @@ render_frame(struct ApplicationState* app,
 		glUseProgram(gl_renderer->shader_program_id);
 		glBindVertexArray(gl_renderer->VAO);
 
-		if (app->busy_loops > 0) {
+		if (app->args.busy_loops > 0) {
 			// printf("Setting busyLoops to %d\n", app->busy_loops);
-			glUniform1i(app->gl_renderer.busyLoopsLoc, app->busy_loops);
+			glUniform1i(app->gl_renderer.busyLoopsLoc, app->args.busy_loops);
 		}
 
 		XrView* view = &app->oxr.views[view_index];
@@ -3792,7 +3808,7 @@ render_frame(struct ApplicationState* app,
 		glUniformMatrix4fv(gl_renderer->projLoc, 1, GL_FALSE, (float*)projection_matrix.m);
 
 
-		if (app->pose_test) {
+		if (app->args.pose_test) {
 			glUniform4f(gl_renderer->colorLoc, 0.f, 1.0f, 0.f, 1.0);
 
 			XrVector3f scale = {.x = 1.f, .y = 1.f, .z = 1.f};
@@ -3816,7 +3832,7 @@ render_frame(struct ApplicationState* app,
 		}
 
 
-		if (app->render_floor) {
+		if (app->args.render_floor) {
 			// render floor at y = 0
 			glUniform4f(gl_renderer->colorLoc, 0.25, 0.25, 0.25, 1.0);
 			render_simple_cube(vec3(0, 0, 0), vec3(1, 0.001, 1), gl_renderer->modelLoc);
@@ -3939,8 +3955,10 @@ render_frame(struct ApplicationState* app,
 
 		struct xdev_space_t* xdev_ext =
 		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
-		if (xdev_ext && xdev_ext->base.supported && xdev_ext->system_supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported &&
+		    xdev_ext->system_supported) {
 			glUniform4f(gl_renderer->colorLoc, 1.0, 1.0, 0.5, 1.0);
+
 			for (struct xdev_space_element* element = xdev_ext->xdev_space_list; element;
 			     element = element->next) {
 				if (element->space != XR_NULL_HANDLE) {
@@ -3952,11 +3970,19 @@ render_frame(struct ApplicationState* app,
 					bool l_valid =
 					    //(l.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0 &&
 					    (l.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+
+					char* name_hmd = strstr(element->xprops.name, "HMD");
+					char* serial_hmd = strstr(element->xprops.serial, "HMD");
+
 					/*
 					printf("%s [%s] l valid %d %f %f %f\n", element->xprops.name, element->xprops.serial,
 					       l_valid, l.pose.position.x, l.pose.position.y, l.pose.position.z);
 					*/
-					if (l_valid) {
+
+					// skip rendering for everything that has HMD in the name to avoid blocking the view.
+					// TODO: devices are not guaranted to have HMD in the name. Perhaps don't render cubes
+					// very close to view space?
+					if (name_hmd == NULL && serial_hmd == NULL && l_valid) {
 						render_block(&l.pose.position, &l.pose.orientation, &scale, gl_renderer->modelLoc);
 					}
 				}
