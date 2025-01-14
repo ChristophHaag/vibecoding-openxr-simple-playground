@@ -3868,33 +3868,36 @@ render_frame(struct ApplicationState* app,
 			// if at least some joints had valid poses, draw them instead of controller blocks
 			bool any_joints_valid = false;
 
-			struct XrHandJointLocationsEXT* joint_locations = &hand_tracking->joint_locations[hand];
-			if (joint_locations->isActive) {
-				for (uint32_t i = 0; i < joint_locations->jointCount; i++) {
-					struct XrHandJointLocationEXT* joint_location = &joint_locations->jointLocations[i];
+			if (hand_tracking && hand_tracking->base.supported && hand_tracking->system_supported) {
+				struct XrHandJointLocationsEXT* joint_locations = &hand_tracking->joint_locations[hand];
+				if (joint_locations->isActive) {
+					for (uint32_t i = 0; i < joint_locations->jointCount; i++) {
+						struct XrHandJointLocationEXT* joint_location = &joint_locations->jointLocations[i];
 
-					if (!(joint_location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
-						// printf("Hand %d Joint %d: Position not valid\n", hand, i);
-						continue;
-					}
-
-					float size = joint_location->radius;
-					render_cube(&joint_location->pose.position, &joint_location->pose.orientation, size,
-					            gl_renderer->modelLoc);
-
-					if (joint_locations->next != NULL) {
-						// we set .next only to null or XrHandJointVelocitiesEXT in main
-						XrHandJointVelocitiesEXT* vel = (XrHandJointVelocitiesEXT*)joint_locations->next;
-						if ((vel->jointVelocities[i].velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0) {
-							visualize_velocity(&joint_location->pose, &vel->jointVelocities[i].linearVelocity,
-							                   &vel->jointVelocities[i].angularVelocity, gl_renderer->modelLoc,
-							                   0.005);
-						} else {
-							printf("Joint velocities %d invalid\n", i);
+						if (!(joint_location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+							// printf("Hand %d Joint %d: Position not valid\n", hand, i);
+							continue;
 						}
-					}
 
-					any_joints_valid = true;
+						float size = joint_location->radius;
+						render_cube(&joint_location->pose.position, &joint_location->pose.orientation, size,
+						            gl_renderer->modelLoc);
+
+						if (joint_locations->next != NULL) {
+							// we set .next only to null or XrHandJointVelocitiesEXT in main
+							XrHandJointVelocitiesEXT* vel = (XrHandJointVelocitiesEXT*)joint_locations->next;
+							if ((vel->jointVelocities[i].velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) !=
+							    0) {
+								visualize_velocity(&joint_location->pose, &vel->jointVelocities[i].linearVelocity,
+								                   &vel->jointVelocities[i].angularVelocity, gl_renderer->modelLoc,
+								                   0.005);
+							} else {
+								printf("Joint velocities %d invalid\n", i);
+							}
+						}
+
+						any_joints_valid = true;
+					}
 				}
 			}
 
