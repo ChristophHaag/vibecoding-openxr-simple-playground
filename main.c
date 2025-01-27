@@ -127,7 +127,7 @@ FOR_EACH_GL_FUNC(GL_DECL)
 
 // initializes each global declaration with SDL_GL_GetProcAddress
 void
-init_gl_funcs()
+init_gl_funcs(void)
 {
 	FOR_EACH_GL_FUNC(LOAD_GL_FUNC)
 }
@@ -171,7 +171,7 @@ Example of how to use expansion macros to make an enum-to-string function:
 	if (val != 0x7FFFFFFF)                                                                           \
 		printf("\t\t%s\n", #name);
 #define XR_ENUM_PRINT_VALS(enumType)                                                               \
-	void XrPrintEnum_##enumType()                                                                    \
+	void XrPrintEnum_##enumType(void)                                                                    \
 	{                                                                                                \
 		XR_LIST_ENUM_##enumType(XR_PRINT_ENUM)                                                         \
 	}
