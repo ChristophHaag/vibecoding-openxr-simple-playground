@@ -203,23 +203,6 @@ static XrPosef identity_pose = {.orientation = {.x = 0, .y = 0, .z = 0, .w = 1.0
 #define HAND_RIGHT_INDEX 1
 #define HAND_COUNT 2
 
-static double
-get_ts_s()
-{
-	struct timeval now;
-	double secs = 0;
-
-	gettimeofday(&now, NULL);
-	secs = (double)now.tv_usec / 1000000 + (double)now.tv_sec;
-
-	static double start_ts = 0;
-	if (start_ts == 0) {
-		start_ts = secs;
-	}
-
-	return secs - start_ts;
-}
-
 // =============================================================================
 // math code adapted from
 // https://github.com/KhronosGroup/OpenXR-SDK-Source/blob/master/src/common/xr_linear.h
