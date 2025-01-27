@@ -3107,11 +3107,14 @@ main(int argc, char** argv)
 				free(loc_arr); // we copied all info we need
 
 				// delete old list of planes that should now have only planes not detected anymore
-				for (struct plane_data_t* l = plane_detection_ext->plane_data_list; l; l = l->next) {
-					for (uint32_t i_poly = 0; i_poly < l->polygon_count; i_poly++) {
-						free(l->polygons[i_poly].vertices);
+				struct plane_data_t *l = plane_detection_ext->plane_data_list;
+				while(l != NULL) {
+					l = l->next;
+					struct plane_data_t *tmp = l;
+					for (uint32_t i_poly = 0; i_poly < tmp->polygon_count; i_poly++) {
+						free(tmp->polygons[i_poly].vertices);
 					}
-					free(l);
+					free(tmp);
 				}
 				plane_detection_ext->plane_data_list = new_list;
 
