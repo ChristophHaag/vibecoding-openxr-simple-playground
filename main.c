@@ -3841,10 +3841,6 @@ render_frame(struct ApplicationState* app,
 				glUniform4f(gl_renderer->colorLoc, 0.5, 1.0, 0.5, 1.0);
 			}
 
-
-			// if at least some joints had valid poses, draw them instead of controller blocks
-			bool any_joints_valid = false;
-
 			if (hand_tracking && hand_tracking->base.supported && hand_tracking->system_supported) {
 				struct XrHandJointLocationsEXT* joint_locations = &hand_tracking->joint_locations[hand];
 				if (joint_locations->isActive) {
@@ -3872,13 +3868,9 @@ render_frame(struct ApplicationState* app,
 								printf("Joint velocities %d invalid\n", i);
 							}
 						}
-
-						any_joints_valid = true;
 					}
 				}
 			}
-
-
 
 			bool hand_location_valid =
 			    app->hand_pose_action.states[hand].pose_.isActive &&
