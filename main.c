@@ -959,7 +959,6 @@ destroy_xdev_space(XrInstance instance, struct xdev_space_element** element)
 void
 destroy_xdev_space_list(XrInstance instance, struct xdev_space_element** list)
 {
-	XrResult result = XR_SUCCESS;
 	struct xdev_space_element* element = *list;
 
 	while (element) {
