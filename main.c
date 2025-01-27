@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <getopt.h>
+#include <math.h>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -84,7 +85,7 @@ gettimeofday(struct timeval* tp, struct timezone* tzp)
 
 #define GL_DECL(TYPE, FUNC) static TYPE FUNC = NULL;
 
-#define LOAD_GL_FUNC(TYPE, FUNC) FUNC = (TYPE)SDL_GL_GetProcAddress(#FUNC);
+#define LOAD_GL_FUNC(TYPE, FUNC) (FUNC) = *(TYPE*)SDL_GL_GetProcAddress(#FUNC);
 
 #define FOR_EACH_GL_FUNC(_)                                                                        \
 	_(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers)                                             \
@@ -127,7 +128,7 @@ FOR_EACH_GL_FUNC(GL_DECL)
 
 // initializes each global declaration with SDL_GL_GetProcAddress
 void
-init_gl_funcs()
+init_gl_funcs(void)
 {
 	FOR_EACH_GL_FUNC(LOAD_GL_FUNC)
 }
@@ -171,7 +172,7 @@ Example of how to use expansion macros to make an enum-to-string function:
 	if (val != 0x7FFFFFFF)                                                                           \
 		printf("\t\t%s\n", #name);
 #define XR_ENUM_PRINT_VALS(enumType)                                                               \
-	void XrPrintEnum_##enumType()                                                                    \
+	void XrPrintEnum_##enumType(void)                                                                    \
 	{                                                                                                \
 		XR_LIST_ENUM_##enumType(XR_PRINT_ENUM)                                                         \
 	}
@@ -202,23 +203,6 @@ static XrPosef identity_pose = {.orientation = {.x = 0, .y = 0, .z = 0, .w = 1.0
 #define HAND_LEFT_INDEX 0
 #define HAND_RIGHT_INDEX 1
 #define HAND_COUNT 2
-
-static double
-get_ts_s()
-{
-	struct timeval now;
-	double secs = 0;
-
-	gettimeofday(&now, NULL);
-	secs = (double)now.tv_usec / 1000000 + (double)now.tv_sec;
-
-	static double start_ts = 0;
-	if (start_ts == 0) {
-		start_ts = secs;
-	}
-
-	return secs - start_ts;
-}
 
 // =============================================================================
 // math code adapted from
@@ -976,7 +960,6 @@ destroy_xdev_space(XrInstance instance, struct xdev_space_element** element)
 void
 destroy_xdev_space_list(XrInstance instance, struct xdev_space_element** list)
 {
-	XrResult result = XR_SUCCESS;
 	struct xdev_space_element* element = *list;
 
 	while (element) {
@@ -2721,7 +2704,6 @@ main(int argc, char** argv)
 	if (!xr_check(app->oxr.instance, result, "failed to attach action set"))
 		return 1;
 
-	uint64_t frame_count = 0;
 	XrEventDataBuffer* runtime_event = NULL;
 
 	bool quit_renderloop = false;
@@ -2910,8 +2892,6 @@ main(int argc, char** argv)
 		if (skip_renderloop) {
 			continue;
 		}
-
-		frame_count++;
 
 		// --- Wait for our turn to do head-pose dependent computation and render a frame
 		app->oxr.frameState = (XrFrameState){.type = XR_TYPE_FRAME_STATE, .next = NULL};
@@ -3127,11 +3107,14 @@ main(int argc, char** argv)
 				free(loc_arr); // we copied all info we need
 
 				// delete old list of planes that should now have only planes not detected anymore
-				for (struct plane_data_t* l = plane_detection_ext->plane_data_list; l; l = l->next) {
-					for (uint32_t i_poly = 0; i_poly < l->polygon_count; i_poly++) {
-						free(l->polygons[i_poly].vertices);
+				struct plane_data_t *l = plane_detection_ext->plane_data_list;
+				while(l != NULL) {
+					l = l->next;
+					struct plane_data_t *tmp = l;
+					for (uint32_t i_poly = 0; i_poly < tmp->polygon_count; i_poly++) {
+						free(tmp->polygons[i_poly].vertices);
 					}
-					free(l);
+					free(tmp);
 				}
 				plane_detection_ext->plane_data_list = new_list;
 
@@ -3629,12 +3612,6 @@ vec3_norm(XrVector3f* vec)
 	return r;
 }
 
-static vec3_t colors[] = {
-    {255, 0, 0},   {0, 255, 0},     {0, 0, 255},     {255, 255, 0}, {0, 255, 255},
-    {255, 0, 255}, {192, 192, 192}, {128, 128, 128}, {128, 0, 0},   {128, 128, 0},
-    {0, 128, 0},   {128, 0, 128},   {0, 128, 128},   {0, 0, 128},
-};
-
 static mat4_t
 m4_dir_to_matrix(vec3_t dir)
 {
@@ -3864,10 +3841,6 @@ render_frame(struct ApplicationState* app,
 				glUniform4f(gl_renderer->colorLoc, 0.5, 1.0, 0.5, 1.0);
 			}
 
-
-			// if at least some joints had valid poses, draw them instead of controller blocks
-			bool any_joints_valid = false;
-
 			if (hand_tracking && hand_tracking->base.supported && hand_tracking->system_supported) {
 				struct XrHandJointLocationsEXT* joint_locations = &hand_tracking->joint_locations[hand];
 				if (joint_locations->isActive) {
@@ -3895,13 +3868,9 @@ render_frame(struct ApplicationState* app,
 								printf("Joint velocities %d invalid\n", i);
 							}
 						}
-
-						any_joints_valid = true;
 					}
 				}
 			}
-
-
 
 			bool hand_location_valid =
 			    app->hand_pose_action.states[hand].pose_.isActive &&
