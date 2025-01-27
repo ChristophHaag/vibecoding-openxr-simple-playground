@@ -2704,7 +2704,6 @@ main(int argc, char** argv)
 	if (!xr_check(app->oxr.instance, result, "failed to attach action set"))
 		return 1;
 
-	uint64_t frame_count = 0;
 	XrEventDataBuffer* runtime_event = NULL;
 
 	bool quit_renderloop = false;
@@ -2893,8 +2892,6 @@ main(int argc, char** argv)
 		if (skip_renderloop) {
 			continue;
 		}
-
-		frame_count++;
 
 		// --- Wait for our turn to do head-pose dependent computation and render a frame
 		app->oxr.frameState = (XrFrameState){.type = XR_TYPE_FRAME_STATE, .next = NULL};
