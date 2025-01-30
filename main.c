@@ -8,10 +8,11 @@
  */
 
 #include <assert.h>
-#include <stdio.h>
-#include <stdbool.h>
 #include <getopt.h>
 #include <math.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
