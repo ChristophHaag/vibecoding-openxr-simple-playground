@@ -86,7 +86,7 @@ gettimeofday(struct timeval* tp, struct timezone* tzp)
 
 #define GL_DECL(TYPE, FUNC) static TYPE FUNC = NULL;
 
-#define LOAD_GL_FUNC(TYPE, FUNC) (FUNC) = *(TYPE*)SDL_GL_GetProcAddress(#FUNC);
+#define LOAD_GL_FUNC(TYPE, FUNC) *(void**)&(FUNC) = SDL_GL_GetProcAddress(#FUNC);
 
 #define FOR_EACH_GL_FUNC(_)                                                                        \
 	_(PFNGLDELETEFRAMEBUFFERSPROC, glDeleteFramebuffers)                                             \
