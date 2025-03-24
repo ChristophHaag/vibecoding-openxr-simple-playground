@@ -1308,9 +1308,6 @@ struct ApplicationState
 	// Grabbing objects is not actually implemented in this demo, it only gives some  haptic feebdack.
 	struct action_t grab_action;
 
-	struct action_t create_anchor;
-	struct action_t delete_anchor;
-
 	// A 1D action that is fed by one axis of a 2D input (y axis of thumbstick).
 	struct action_t accelerate_action;
 
@@ -2523,13 +2520,6 @@ main(int argc, char** argv)
 	                   &app->grab_action.action))
 		return 1;
 
-	app->create_anchor =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_BOOLEAN_INPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_BOOLEAN_INPUT, "createanchor",
-	                   "Hold 2 seconds to create an Anchor", gameplay_actionset, HAND_COUNT,
-	                   hand_paths, &app->create_anchor.action))
-		return 1;
-
 	// A 1D action that is fed by one axis of a 2D input (y axis of thumbstick).
 	app->accelerate_action =
 	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_FLOAT_INPUT};
@@ -2563,9 +2553,6 @@ main(int argc, char** argv)
 
 	struct Binding simple_bindings[] = {
 	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/select/click", "/user/hand/right/input/select/click"},
-	     .path_count = 2},
-	    {.action = app->create_anchor.action,
 	     .paths = {"/user/hand/left/input/select/click", "/user/hand/right/input/select/click"},
 	     .path_count = 2},
 	    {.action = app->hand_pose_action.action,
@@ -2603,10 +2590,7 @@ main(int argc, char** argv)
 
 	struct Binding index_bindings[] = {
 	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
-	     .path_count = 2},
-	    {.action = app->create_anchor.action,
-	     .paths = {"/user/hand/left/input/trigger/click", "/user/hand/right/input/trigger/click"},
+	     .paths = {"/user/hand/left/input/trigger", "/user/hand/right/input/trigger"},
 	     .path_count = 2},
 	    {.action = app->accelerate_action.action,
 	     .paths = {"/user/hand/left/input/thumbstick/y", "/user/hand/right/input/thumbstick/y"},
@@ -2629,9 +2613,6 @@ main(int argc, char** argv)
 	struct Binding vive_bindings[] = {
 	    {.action = app->grab_action.action,
 	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
-	     .path_count = 2},
-	    {.action = app->create_anchor.action,
-	     .paths = {"/user/hand/left/input/trigger/click", "/user/hand/right/input/trigger/click"},
 	     .path_count = 2},
 	    {.action = app->hand_pose_action.action,
 	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
@@ -2966,11 +2947,6 @@ main(int argc, char** argv)
 			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->accelerate_action, i,
 			                     hand_paths, XR_NULL_HANDLE, 0, false))
 				printf("Failed to get accelerate action data for hand %d\n", i);
-
-
-			if (!get_action_data(app->oxr.instance, app->oxr.session, &app->create_anchor, i, hand_paths,
-			                     XR_NULL_HANDLE, 0, false))
-				printf("Failed to get grab action data for hand %d\n", i);
 
 
 			if (app->grab_action.states[i].float_.isActive &&
