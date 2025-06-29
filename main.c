@@ -938,6 +938,20 @@ init_hand_interaction_t(struct base_extension_t** out_base)
 	return true;
 }
 
+struct user_presence_t
+{
+	struct base_extension_t base;
+};
+static bool
+init_user_presence_t(struct base_extension_t** out_base)
+{
+	*out_base = malloc(sizeof(struct user_presence_t));
+
+	(*out_base)->ext_name_string = XR_EXT_USER_PRESENCE_EXTENSION_NAME;
+	(*out_base)->init_fp = NULL;
+	return true;
+}
+
 // wrapper struct to store everything related to one xdev
 struct xdev_space_element
 {
@@ -1197,6 +1211,7 @@ static init_ext_struct ext_init_funcs[] = {
     &init_refresh_rate_t,     //
     &init_plane_detection_t,  //
     &init_hand_interaction_t, //
+    &init_user_presence_t,    //
     &init_xdev_space_t,       //
 };
 
@@ -2857,6 +2872,14 @@ main(int argc, char** argv)
 				printf("EVENT: perf settings!\n");
 				XrEventDataPerfSettingsEXT* event = (XrEventDataPerfSettingsEXT*)runtime_event;
 				(void)event;
+				// this event is from an extension
+				break;
+			}
+			case XR_TYPE_EVENT_DATA_USER_PRESENCE_CHANGED_EXT: {
+				printf("EVENT: user presence changed!!\n");
+				XrEventDataUserPresenceChangedEXT* event =
+					(XrEventDataUserPresenceChangedEXT*)runtime_event;
+				printf("Event: user presence changed: isUserPresent=%s\n", event->isUserPresent ? "true" : "false");
 				// this event is from an extension
 				break;
 			}
