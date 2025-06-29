@@ -545,10 +545,12 @@ xr_check(XrInstance instance, XrResult result, const char* format, ...)
 		return true;
 
 	char resultString[XR_MAX_RESULT_STRING_SIZE];
-	xrResultToString(instance, result, resultString);
-
 	char formatRes[XR_MAX_RESULT_STRING_SIZE + 1024];
-	snprintf(formatRes, XR_MAX_RESULT_STRING_SIZE + 1023, "%s [%s]\n", format, resultString);
+
+	if (instance && XR_SUCCEEDED(xrResultToString(instance, result, resultString)))
+		snprintf(formatRes, XR_MAX_RESULT_STRING_SIZE + 1023, "%s [%s]\n", format, resultString);
+	else
+		snprintf(formatRes, XR_MAX_RESULT_STRING_SIZE + 1023, "%s\n", format);
 
 	va_list args;
 	va_start(args, format);
