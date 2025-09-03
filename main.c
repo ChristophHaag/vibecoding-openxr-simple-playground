@@ -779,7 +779,12 @@ static bool
 init_egl_t(struct base_extension_t** out_base)
 {
 	*out_base = malloc(sizeof(struct base_extension_t));
+#ifdef XR_USE_PLATFORM_EGL
 	(*out_base)->ext_name_string = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
+#else
+	// just a random string that will never be accidentally a valid extension name
+	(*out_base)->ext_name_string = "INVALID_EXTENSION";
+#endif
 	(*out_base)->init_fp = NULL;
 
 	return true;
