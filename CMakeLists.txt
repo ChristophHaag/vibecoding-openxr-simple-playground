@@ -44,6 +44,11 @@ IF(NOT WIN32)
   pkg_search_module(EGL egl)
   list(APPEND EXTRA_LIBS ${EGL_LIBRARIES})
   list(APPEND SYSTEM_INCLUDES ${EGL_INCLUDE_DIRS})
+
+  include(FindPkgConfig)
+  pkg_search_module(EGL egl)
+  list(APPEND EXTRA_LIBS ${EGL_LIBRARIES})
+  list(APPEND SYSTEM_INCLUDES ${EGL_INCLUDE_DIRS})
 ENDIF()
 
 # Try OpenXRConfig.cmake from OpenXR SDK

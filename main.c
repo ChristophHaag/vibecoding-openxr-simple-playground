@@ -26,7 +26,10 @@
 #include <X11/Xlib.h>
 #include <GL/glx.h>
 
+#include <EGL/egl.h>
+
 #define XR_USE_PLATFORM_XLIB
+#define XR_USE_PLATFORM_EGL
 #define XR_USE_GRAPHICS_API_OPENGL
 
 #else
@@ -500,19 +503,8 @@ struct gl_renderer_t
 
 struct hand_tracking_t;
 
-#ifdef _WIN32
 bool
-init_sdl_window(HDC* xDisplay, HGLRC* glxContext, int w, int h);
-#else
-bool
-init_sdl_window(Display** xDisplay,
-                uint32_t* visualid,
-                GLXFBConfig* glxFBConfig,
-                GLXDrawable* glxDrawable,
-                GLXContext* glxContext,
-                int w,
-                int h);
-#endif
+init_sdl_window(int w, int h);
 
 int
 init_gl(uint32_t view_count, uint32_t* swapchain_lengths, struct gl_renderer_t* gl_renderer);
@@ -778,6 +770,18 @@ init_opengl_t(struct base_extension_t** out_base)
 	*out_base = malloc(sizeof(struct opengl_t));
 	(*out_base)->ext_name_string = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
 	(*out_base)->init_fp = &init_opengl_fp;
+
+	return true;
+}
+
+// EGL does not have function pointers and we don't store associated state here
+static bool
+init_egl_t(struct base_extension_t** out_base)
+{
+	*out_base = malloc(sizeof(struct base_extension_t));
+	(*out_base)->ext_name_string = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
+	(*out_base)->init_fp = NULL;
+
 	return true;
 }
 
@@ -1214,6 +1218,7 @@ static init_ext_struct ext_init_funcs[] = {
     &init_hand_interaction_t, //
     &init_user_presence_t,    //
     &init_xdev_space_t,       //
+    &init_egl_t,              //
 };
 
 struct OpenXRState
@@ -1995,11 +2000,25 @@ main(int argc, char** argv)
 
 	parse_opts(argc, argv, app);
 
+	void* gl_graphics_binding = NULL;
+
+	// each graphics API requires the use of a specialized struct.
 #ifdef _WIN32
-	XrGraphicsBindingOpenGLWin32KHR graphics_binding_gl = {0};
+	XrGraphicsBindingOpenGLWin32KHR wgl_graphics_binding = (XrGraphicsBindingOpenGLWin32KHR){
+	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
+	};
+	gl_graphics_binding = &wgl_graphics_binding;
 #else
-	// The runtime interacts with the OpenGL images (textures) via a Swapchain.
-	XrGraphicsBindingOpenGLXlibKHR graphics_binding_gl = {0};
+	XrGraphicsBindingOpenGLXlibKHR glx_graphics_binding = (XrGraphicsBindingOpenGLXlibKHR){
+	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
+	};
+
+	XrGraphicsBindingEGLMNDX egl_graphics_binding = (XrGraphicsBindingEGLMNDX){
+	    .type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
+	};
+
+	// default may be overwritten later once we detect we are not on glx
+	gl_graphics_binding = &glx_graphics_binding;
 #endif
 
 	XrPath hand_paths[HAND_COUNT];
@@ -2233,31 +2252,40 @@ main(int argc, char** argv)
 
 
 	// --- Create session
-#ifdef _WIN32
-	graphics_binding_gl = (XrGraphicsBindingOpenGLWin32KHR){
-	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
-	};
-#else
-	graphics_binding_gl = (XrGraphicsBindingOpenGLXlibKHR){
-	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
-	};
-#endif
 
 	// create SDL window the size of the left eye & fill GL graphics binding info
-#ifdef _WIN32
-	if (!init_sdl_window(&graphics_binding_gl.hDC, &graphics_binding_gl.hGLRC,
-	                     app->oxr.viewconfig_views[0].recommendedImageRectWidth,
+	if (!init_sdl_window(app->oxr.viewconfig_views[0].recommendedImageRectWidth,
 	                     app->oxr.viewconfig_views[0].recommendedImageRectHeight)) {
-#else
-	if (!init_sdl_window(&graphics_binding_gl.xDisplay, &graphics_binding_gl.visualid,
-	                     &graphics_binding_gl.glxFBConfig, &graphics_binding_gl.glxDrawable,
-	                     &graphics_binding_gl.glxContext,
-	                     app->oxr.viewconfig_views[0].recommendedImageRectWidth,
-	                     app->oxr.viewconfig_views[0].recommendedImageRectHeight)) {
-#endif
 		printf("GLX init failed!\n");
 		return 1;
 	}
+
+	// HACK? OpenXR wants us to report these values, so "work around" SDL and get the underlying
+	// current gl platform stuff.
+#ifdef _WIN32
+	// only one config, gl_graphics_binding already set at startup
+	wgl_graphics_binding.hDC = wglGetCurrentDC();
+	wgl_graphics_binding.hGLRC = wglGetCurrentContext();
+#else
+	// everywhere else need to check what platform SDL uses
+	if (glXGetCurrentContext() != NULL) {
+		gl_graphics_binding = &glx_graphics_binding;
+		printf("Using GLX with context %p\n", (void*)glXGetCurrentContext());
+
+		glx_graphics_binding.xDisplay = XOpenDisplay(NULL);
+		glx_graphics_binding.glxContext = glXGetCurrentContext();
+		glx_graphics_binding.glxDrawable = glXGetCurrentDrawable();
+	}
+	if (eglGetCurrentContext() != NULL) {
+		gl_graphics_binding = &egl_graphics_binding;
+		printf("Using EGL with context %p\n", eglGetCurrentContext());
+
+		egl_graphics_binding.context = eglGetCurrentContext();
+		egl_graphics_binding.display = eglGetCurrentDisplay();
+		egl_graphics_binding.getProcAddress = eglGetProcAddress;
+	}
+#endif
+
 
 	printf("Using OpenGL version: %s\n", glGetString(GL_VERSION));
 	printf("Using OpenGL Renderer: %s\n", glGetString(GL_RENDERER));
@@ -2265,7 +2293,7 @@ main(int argc, char** argv)
 	app->oxr.state = XR_SESSION_STATE_UNKNOWN;
 
 	XrSessionCreateInfo session_create_info = {.type = XR_TYPE_SESSION_CREATE_INFO,
-	                                           .next = &graphics_binding_gl,
+	                                           .next = gl_graphics_binding,
 	                                           .systemId = app->oxr.system_id};
 
 	result = xrCreateSession(app->oxr.instance, &session_create_info, &app->oxr.session);
@@ -2937,6 +2965,7 @@ main(int argc, char** argv)
 		app->oxr.view_state = (XrViewState){.type = XR_TYPE_VIEW_STATE, .next = NULL};
 		result = xrLocateViews(app->oxr.session, &view_locate_info, &app->oxr.view_state,
 		                       app->oxr.view_count, &app->oxr.view_count, app->oxr.views);
+
 		if (!xr_check(app->oxr.instance, result, "Could not locate views"))
 			break;
 
@@ -3366,19 +3395,8 @@ MessageCallback(GLenum source,
 }
 
 
-#ifdef _WIN32
 bool
-init_sdl_window(HDC* xDisplay, HGLRC* glxContext, int w, int h)
-#else
-bool
-init_sdl_window(Display** xDisplay,
-                uint32_t* visualid,
-                GLXFBConfig* glxFBConfig,
-                GLXDrawable* glxDrawable,
-                GLXContext* glxContext,
-                int w,
-                int h)
-#endif
+init_sdl_window(int w, int h)
 {
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) {
 		printf("Unable to initialize SDL");
@@ -3409,18 +3427,6 @@ init_sdl_window(Display** xDisplay,
 	glDebugMessageCallback(MessageCallback, 0);
 
 	SDL_GL_SetSwapInterval(0);
-
-	// HACK? OpenXR wants us to report these values, so "work around" SDL a
-	// bit and get the underlying glx stuff. Does this still work when e.g.
-	// SDL switches to xcb?
-#ifdef _WIN32
-	*xDisplay = wglGetCurrentDC();
-	*glxContext = wglGetCurrentContext();
-#else
-	*xDisplay = XOpenDisplay(NULL);
-	*glxContext = glXGetCurrentContext();
-	*glxDrawable = glXGetCurrentDrawable();
-#endif
 	return true;
 }
 
