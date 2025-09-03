@@ -81,6 +81,17 @@ gettimeofday(struct timeval* tp, struct timezone* tzp)
 
 #endif
 
+#ifndef _WIN32
+#include <sys/time.h>
+#endif
+#include <string.h>
+
+#include "external/openxr_headers/openxr.h"
+#include "external/openxr_headers/openxr_platform.h"
+#include "external/openxr_headers/openxr_reflection.h"
+
+#include "external/openxr_headers/XR_MNDX_xdev_space.h"
+
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_events.h>
 
@@ -134,16 +145,6 @@ init_gl_funcs(void)
 	FOR_EACH_GL_FUNC(LOAD_GL_FUNC)
 }
 
-#ifndef _WIN32
-#include <sys/time.h>
-#endif
-#include <string.h>
-
-#include "external/openxr_headers/openxr.h"
-#include "external/openxr_headers/openxr_platform.h"
-#include "external/openxr_headers/openxr_reflection.h"
-
-#include "external/openxr_headers/XR_MNDX_xdev_space.h"
 
 /*
 This file contains expansion macros (X Macros) for OpenXR enumerations and structures.
