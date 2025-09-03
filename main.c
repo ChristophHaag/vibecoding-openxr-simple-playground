@@ -143,10 +143,7 @@ FOR_EACH_GL_FUNC(GL_DECL)
 
 // initializes each global declaration with SDL_GL_GetProcAddress
 void
-init_gl_funcs(void)
-{
-	FOR_EACH_GL_FUNC(LOAD_GL_FUNC)
-}
+init_gl_funcs(void){FOR_EACH_GL_FUNC(LOAD_GL_FUNC)}
 
 
 /*
@@ -177,7 +174,7 @@ Example of how to use expansion macros to make an enum-to-string function:
 	if (val != 0x7FFFFFFF)                                                                           \
 		printf("\t\t%s\n", #name);
 #define XR_ENUM_PRINT_VALS(enumType)                                                               \
-	void XrPrintEnum_##enumType(void)                                                                    \
+	void XrPrintEnum_##enumType(void)                                                                \
 	{                                                                                                \
 		XR_LIST_ENUM_##enumType(XR_PRINT_ENUM)                                                         \
 	}
@@ -188,14 +185,15 @@ Example of how to use expansion macros to make an enum-to-string function:
 	XR_STR_ENUM(enumType)                                                                            \
 	XR_ENUM_PRINT_VALS(enumType)
 
-XR_MACROS(XrResult)
-XR_MACROS(XrFormFactor)
-XR_MACROS(XrReferenceSpaceType)
-XR_MACROS(XrViewConfigurationType)
-XR_MACROS(XrEnvironmentBlendMode)
-XR_MACROS(XrPlaneDetectionStateEXT)
+// clang-format being annoying, even when disabled for this block, it indents the typedef below...
+XR_MACROS(XrResult)                     //
+    XR_MACROS(XrFormFactor)             //
+    XR_MACROS(XrReferenceSpaceType)     //
+    XR_MACROS(XrViewConfigurationType)  //
+    XR_MACROS(XrEnvironmentBlendMode)   //
+    XR_MACROS(XrPlaneDetectionStateEXT) //
 
-typedef const char* (*XrStr_fn)(long value);
+    typedef const char* (*XrStr_fn)(long value);
 
 
 #define degrees_to_radians(angle_degrees) ((angle_degrees) * M_PI / 180.0)
@@ -2912,8 +2910,9 @@ main(int argc, char** argv)
 			case XR_TYPE_EVENT_DATA_USER_PRESENCE_CHANGED_EXT: {
 				printf("EVENT: user presence changed!!\n");
 				XrEventDataUserPresenceChangedEXT* event =
-					(XrEventDataUserPresenceChangedEXT*)runtime_event;
-				printf("Event: user presence changed: isUserPresent=%s\n", event->isUserPresent ? "true" : "false");
+				    (XrEventDataUserPresenceChangedEXT*)runtime_event;
+				printf("Event: user presence changed: isUserPresent=%s\n",
+				       event->isUserPresent ? "true" : "false");
 				// this event is from an extension
 				break;
 			}
@@ -3144,10 +3143,10 @@ main(int argc, char** argv)
 				free(loc_arr); // we copied all info we need
 
 				// delete old list of planes that should now have only planes not detected anymore
-				struct plane_data_t *l = plane_detection_ext->plane_data_list;
-				while(l != NULL) {
+				struct plane_data_t* l = plane_detection_ext->plane_data_list;
+				while (l != NULL) {
 					l = l->next;
-					struct plane_data_t *tmp = l;
+					struct plane_data_t* tmp = l;
 					for (uint32_t i_poly = 0; i_poly < tmp->polygon_count; i_poly++) {
 						free(tmp->polygons[i_poly].vertices);
 					}
