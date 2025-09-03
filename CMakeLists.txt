@@ -20,6 +20,7 @@ IF (WIN32)
   # TODO: visual studio build getopt?
   # find_library(GETOPT_LIB getopt)
   # SET(EXTRA_LIBS ${GETOPT_LIB})
+  SET(EXTRA_INCLUDES "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/external/getopt")
 ENDIF()
 
 add_executable(openxr-playground main.c ${EXTRA_SOURCES})
