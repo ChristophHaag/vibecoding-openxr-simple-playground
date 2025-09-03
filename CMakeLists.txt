@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
 
-option(VCPKG "Use vcpkg for dependencies" OFF)
-
-if (VCPKG)
-  MESSAGE("Using vcpkg in ./vcpkg")
-  set(CMAKE_TOOLCHAIN_FILE ./vcpkg/scripts/buildsystems/vcpkg.cmake)
+if (EXISTS "${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+  MESSAGE("Using vcpkg in ${CMAKE_SOURCE_DIR}/vcpkg")
+  set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake)
+else()
+  MESSAGE("NOT using vcpkg for this build because ${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake does not exist")
 endif()
 
 project(openxr-playground)

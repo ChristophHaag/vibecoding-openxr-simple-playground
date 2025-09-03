@@ -25,7 +25,7 @@ Install visual studio (express) or Build Tools for Visual Studio. Open a develop
 
     .\vcpkg\bootstrap-vcpkg.bat
     .\vcpkg\vcpkg.exe install sdl2:x64-windows openxr-loader:x64-windows
-    cmake -GNinja -Bbuild -DVCPKG=ON
+    cmake -GNinja -Bbuild
     ninja -C build
 
 ### clang + source build
