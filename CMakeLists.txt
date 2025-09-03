@@ -7,7 +7,7 @@ if (VCPKG)
   set(CMAKE_TOOLCHAIN_FILE ./vcpkg/scripts/buildsystems/vcpkg.cmake)
 endif()
 
-project(openxr-example)
+project(openxr-playground)
 
 if (POLICY CMP0072)
   cmake_policy (SET CMP0072 NEW)
