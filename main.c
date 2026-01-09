@@ -2278,6 +2278,41 @@ main(int argc, char** argv)
 		glx_graphics_binding.xDisplay = XOpenDisplay(NULL);
 		glx_graphics_binding.glxContext = glXGetCurrentContext();
 		glx_graphics_binding.glxDrawable = glXGetCurrentDrawable();
+
+		// Get visualid from window SDL created for us.
+		XWindowAttributes attr;
+		XGetWindowAttributes(glx_graphics_binding.xDisplay, glx_graphics_binding.glxDrawable, &attr);
+		glx_graphics_binding.visualid = XVisualIDFromVisual(attr.visual);
+
+		// Get fbconfig from glx context SDL created for us.
+		// Ideally you get this from your setup code or your framework.
+		int fbconfig_id = 0;
+		glXQueryContext(glx_graphics_binding.xDisplay, glx_graphics_binding.glxContext, GLX_FBCONFIG_ID,
+		                &fbconfig_id);
+
+		int fbconfig_count = 0;
+		GLXFBConfig* fbconfigs =
+		    glXGetFBConfigs(glx_graphics_binding.xDisplay, DefaultScreen(glx_graphics_binding.xDisplay),
+		                    &fbconfig_count);
+
+		if (fbconfigs) {
+			glx_graphics_binding.glxFBConfig = NULL;
+			for (int i = 0; i < fbconfig_count; i++) {
+				int curr_id;
+				glXGetFBConfigAttrib(glx_graphics_binding.xDisplay, fbconfigs[i], GLX_FBCONFIG_ID,
+				                     &curr_id);
+				if (curr_id == fbconfig_id) {
+					glx_graphics_binding.glxFBConfig = fbconfigs[i];
+					break;
+				}
+			}
+			XFree(fbconfigs);
+		}
+
+		if (!glx_graphics_binding.glxFBConfig) {
+			printf("Did not find GLXFBConfig that SDL used. Weird. Trying to continue with placeholder.");
+			glx_graphics_binding.glxFBConfig = (void*)0x1;
+		}
 	}
 	if (eglGetCurrentContext() != NULL) {
 		gl_graphics_binding = &egl_graphics_binding;
