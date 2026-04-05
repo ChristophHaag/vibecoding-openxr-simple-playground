@@ -213,6 +213,24 @@ XR_MACROS(XrResult)                     //
 #define HAND_RIGHT_INDEX 1
 #define HAND_COUNT 2
 
+// Grab threshold: trigger value above which haptic feedback fires.
+static constexpr float GRAB_HAPTIC_THRESHOLD = 0.75f;
+
+// Velocity visualization: width of the rendered velocity arrow block.
+static constexpr float VELOCITY_ARROW_WIDTH = 0.005f;
+
+// Scene cubes: half-edge length of the spinning demo cubes.
+static constexpr float SCENE_CUBE_SIZE = 0.33f;
+
+// Scene cubes: distance from origin.
+static constexpr float SCENE_CUBE_DIST = 1.5f;
+
+// Scene cubes: height above floor.
+static constexpr float SCENE_CUBE_HEIGHT = 0.5f;
+
+// Floor tile: width/depth of the rendered floor square (metres).
+static constexpr float FLOOR_SIZE = 1.0f;
+
 // =============================================================================
 // math code adapted from
 // https://github.com/KhronosGroup/OpenXR-SDK-Source/blob/master/src/common/xr_linear.h
@@ -556,6 +574,22 @@ xr_check(XrInstance instance, XrResult result, const char* format, ...)
 
 	return false;
 }
+
+// Convenience macro: check an XrResult and return the failure code on error.
+// Usage:  CHECK_XR(instance, xrFoo(...), "Failed to foo");
+#define CHECK_XR(instance_, expr_, msg_)                                                           \
+	do {                                                                                             \
+		XrResult _r = (expr_);                                                                         \
+		if (!xr_check((instance_), _r, (msg_)))                                                        \
+			return _r;                                                                                   \
+	} while (0)
+
+// Same but returns false instead of an XrResult (for bool-returning functions).
+#define CHECK_XR_BOOL(instance_, expr_, msg_)                                                      \
+	do {                                                                                             \
+		if (!xr_check((instance_), (expr_), (msg_)))                                                   \
+			return false;                                                                                \
+	} while (0)
 
 
 static void
@@ -3103,7 +3137,7 @@ main(int argc, char** argv)
 
 
 			if (app->grab_action.states[i].float_.isActive &&
-			    app->grab_action.states[i].float_.currentState > 0.75) {
+			    app->grab_action.states[i].float_.currentState > GRAB_HAPTIC_THRESHOLD) {
 				XrHapticVibration vibration = {.type = XR_TYPE_HAPTIC_VIBRATION,
 				                               .next = nullptr,
 				                               .duration = XR_MIN_HAPTIC_DURATION,
@@ -3736,7 +3770,7 @@ m4_dir_to_matrix(HMM_Vec3 dir)
 static void
 render_vec(struct ApplicationState* app, XrVector3f* vec, XrVector3f* start)
 {
-	float width = 0.005;
+	float width = VELOCITY_ARROW_WIDTH;
 	float lin_len = vec3_mag(vec);
 
 	XrVector3f lin_direction = vec3_norm(vec);
@@ -3924,7 +3958,8 @@ render_frame(struct ApplicationState* app,
 		if (app->args.render_floor) {
 			// render floor at y = 0
 			glUniform4f(gl_renderer->colorLoc, 0.25, 0.25, 0.25, 1.0);
-			render_simple_cube(HMM_V3(0, 0, 0), HMM_V3(1, 0.001, 1), gl_renderer->modelLoc);
+			render_simple_cube(HMM_V3(0, 0, 0), HMM_V3(FLOOR_SIZE, 0.001f, FLOOR_SIZE),
+			                   gl_renderer->modelLoc);
 		}
 
 
@@ -3937,12 +3972,14 @@ render_frame(struct ApplicationState* app,
 			const float rotations_per_sec = .25;
 			float angle = ((long)(display_time_seconds * 360. * rotations_per_sec)) % 360;
 
-			float dist = 1.5f;
-			float height = 0.5f;
-			render_rotated_cube(HMM_V3(0, height, -dist), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(HMM_V3(0, height, dist), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(HMM_V3(dist, height, 0), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(HMM_V3(-dist, height, 0), .33f, angle, gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(0, SCENE_CUBE_HEIGHT, -SCENE_CUBE_DIST), SCENE_CUBE_SIZE, angle,
+			                    gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(0, SCENE_CUBE_HEIGHT, SCENE_CUBE_DIST), SCENE_CUBE_SIZE, angle,
+			                    gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(SCENE_CUBE_DIST, SCENE_CUBE_HEIGHT, 0), SCENE_CUBE_SIZE, angle,
+			                    gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(-SCENE_CUBE_DIST, SCENE_CUBE_HEIGHT, 0), SCENE_CUBE_SIZE, angle,
+			                    gl_renderer->modelLoc);
 		}
 
 		// render controllers / hand joints
@@ -3975,7 +4012,7 @@ render_frame(struct ApplicationState* app,
 							    0) {
 								visualize_velocity(&joint_location->pose, &vel->jointVelocities[i].linearVelocity,
 								                   &vel->jointVelocities[i].angularVelocity, gl_renderer->modelLoc,
-								                   0.005);
+								                   VELOCITY_ARROW_WIDTH);
 							} else {
 								printf("Joint velocities %d invalid\n", i);
 							}
@@ -4032,7 +4069,8 @@ render_frame(struct ApplicationState* app,
 				XrSpaceVelocity* vel = (XrSpaceVelocity*)hand_locations[hand].next;
 				if ((vel->velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0) {
 					visualize_velocity(&hand_locations[hand].pose, &vel->linearVelocity,
-					                   &vel->angularVelocity, gl_renderer->modelLoc, 0.005);
+					                   &vel->angularVelocity, gl_renderer->modelLoc,
+					                   VELOCITY_ARROW_WIDTH);
 				}
 			}
 		}
