@@ -151,10 +151,12 @@ This file contains expansion macros (X Macros) for OpenXR enumerations and struc
 Example of how to use expansion macros to make an enum-to-string function:
 */
 
+#define XR_ENUM_UNKNOWN_VALUE 0x7FFFFFFFLL
+
 #define XR_ENUM_CASE_STR(name, val)                                                                \
 	case name: return #name;
 #define XR_ENUM_STR(enumType)                                                                      \
-	const char* XrStr_##enumType(uint64_t e)                                                          \
+	constexpr const char* XrStr_##enumType(enumType e)                                               \
 	{                                                                                                \
 		switch (e) {                                                                                   \
 			XR_LIST_ENUM_##enumType(XR_ENUM_CASE_STR) default : return "Unknown";                        \
@@ -163,15 +165,19 @@ Example of how to use expansion macros to make an enum-to-string function:
 
 #define XR_STR_IF_ENUM(name, val)                                                                  \
 	if (strcmp(#name, e) == 0)                                                                       \
-		return val;
+		return static_cast<int64_t>(val);
 #define XR_STR_ENUM(enumType)                                                                      \
-	uint64_t XrEnum_##enumType(const char* e)                                                        \
+	inline int64_t XrEnumValue_##enumType(const char* e)                                             \
 	{                                                                                                \
-		XR_LIST_ENUM_##enumType(XR_STR_IF_ENUM) return 0x7FFFFFFF;                                     \
+		XR_LIST_ENUM_##enumType(XR_STR_IF_ENUM) return XR_ENUM_UNKNOWN_VALUE;                          \
+	}                                                                                                \
+	inline enumType XrEnum_##enumType(const char* e)                                                 \
+	{                                                                                                \
+		return static_cast<enumType>(XrEnumValue_##enumType(e));                                       \
 	}
 
 #define XR_PRINT_ENUM(name, val)                                                                   \
-	if (val != 0x7FFFFFFF)                                                                           \
+	if ((val) != XR_ENUM_UNKNOWN_VALUE)                                                              \
 		printf("\t\t%s\n", #name);
 #define XR_ENUM_PRINT_VALS(enumType)                                                               \
 	void XrPrintEnum_##enumType(void)                                                                \
@@ -192,8 +198,6 @@ XR_MACROS(XrResult)                     //
     XR_MACROS(XrViewConfigurationType)  //
     XR_MACROS(XrEnvironmentBlendMode)   //
     XR_MACROS(XrPlaneDetectionStateEXT) //
-
-	typedef const char* (*XrStr_fn)(long value);
 
 
 #define degrees_to_radians(angle_degrees) ((angle_degrees) * M_PI / 180.0)
@@ -1929,18 +1933,18 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 			exit(0);
 
 		case 'b':
-			app->oxr.blend_mode = static_cast<XrEnvironmentBlendMode>(XrEnum_XrEnvironmentBlendMode(optarg));
+			app->oxr.blend_mode = XrEnum_XrEnvironmentBlendMode(optarg);
 			app->oxr.blend_mode_explicitly_set = true;
 			printf("ARG: Blend Mode %s -> %d\n", optarg, app->oxr.blend_mode);
 			break;
 
 		case 'f':
-			app->oxr.form_factor = static_cast<XrFormFactor>(XrEnum_XrFormFactor(optarg));
+			app->oxr.form_factor = XrEnum_XrFormFactor(optarg);
 			printf("ARG: Form Factor %s -> %d\n", optarg, app->oxr.form_factor);
 			break;
 
 		case 's':
-			app->oxr.play_space_type = static_cast<XrReferenceSpaceType>(XrEnum_XrReferenceSpaceType(optarg));
+			app->oxr.play_space_type = XrEnum_XrReferenceSpaceType(optarg);
 			printf("ARG: Reference Space %s -> %d\n", optarg, app->oxr.play_space_type);
 			break;
 
@@ -1960,7 +1964,6 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 			} else if (strcmp(optarg, "vertical") == 0) {
 				app->cube.velocity = XrVector3f{.x = 0, .y = velocity, .z = 0};
 			}
-			XrEnum_XrReferenceSpaceType(optarg);
 			printf("ARG: Enable moving cube %s -> %f, %f, %f\n", optarg, app->cube.velocity.x,
 			       app->cube.velocity.y, app->cube.velocity.z);
 			break;
