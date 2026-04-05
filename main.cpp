@@ -17,6 +17,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <vector>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -529,7 +530,7 @@ struct gl_renderer_t
 	int busyLoopsLoc;
 };
 
-struct hand_tracking_t;
+struct ExtHandTracking;
 
 bool
 init_sdl_window(int w, int h);
@@ -544,7 +545,7 @@ render_frame(struct ApplicationState* app,
              struct gl_renderer_t* gl_renderer,
              XrTime predictedDisplayTime,
              XrSpaceLocation* hand_locations,
-             struct hand_tracking_t* hand_tracking,
+             struct ExtHandTracking* hand_tracking,
              bool depth_supported);
 
 struct quad_layer_t;
@@ -776,30 +777,24 @@ get_swapchain_format(XrInstance instance,
 // Section E: Extension registry
 // =============================================================================
 // To add a new extension:
-//   1. Define a struct that embeds base_extension_t as its first member.
-//   2. Write init_<name>_t() to fill ext_name_string and init_fp.
-//   3. (If needed) write init_<name>_fp() to load function pointers.
-//   4. Add &init_<name>_t to ext_init_funcs[].
-//   5. Cast get_ext() result to your struct type where you need it.
+//   1. Define a struct that inherits Extension, set 'name' in its constructor.
+//   2. Declare any function pointer fields (PFN_xrFoo xrFoo = nullptr;).
+//   3. Override load_fps() to load those pointers via LOAD_OR_RETURN.
+//   4. Override on_session_ready(), on_frame(), on_event(), or cleanup()
+//      as needed — all default to no-ops.
+//   5. Add one line to g_extensions[] below.
+//
+// Minimal example:
+//   struct ExtFoo : Extension {
+//       ExtFoo() { name = XR_FOO_EXTENSION_NAME; }
+//       PFN_xrFooBar xrFooBar = nullptr;
+//       XrResult load_fps(XrInstance instance) override {
+//           LOAD_OR_RETURN(xrFooBar, this)
+//           return XR_SUCCESS;
+//       }
+//       void on_session_ready(ApplicationState* app) override { /* ... */ }
+//   };
 // =============================================================================
-
-struct base_extension_t;
-
-// function that initializes an extension struct basics like ext_name_string
-typedef bool (*init_ext_struct)(struct base_extension_t** out_base);
-
-// function that gets the function pointers for an extension struct
-typedef XrResult (*init_ext_fp)(XrInstance instance, struct base_extension_t* base);
-
-struct base_extension_t
-{
-	bool supported;
-	uint32_t version;
-
-	char* ext_name_string;
-
-	init_ext_fp init_fp;
-};
 
 #define LOAD_OR_RETURN(NAME, LOCATION)                                                             \
 	{                                                                                                \
@@ -809,127 +804,121 @@ struct base_extension_t
 			return result;                                                                               \
 	}
 
-
-struct opengl_t
+struct Extension
 {
-	struct base_extension_t base;
+	const char* name = "";
+	bool supported = false;
+	uint32_t version = 0;
 
-	// functions belonging to extensions must be loaded with xrGetInstanceProcAddr before use
-	PFN_xrGetOpenGLGraphicsRequirementsKHR xrGetOpenGLGraphicsRequirementsKHR;
+	// Load extension function pointers. Called once after xrCreateInstance if supported.
+	virtual XrResult load_fps(XrInstance) { return XR_SUCCESS; }
+
+	// Called once after session + swapchains + actions are all set up.
+	virtual void on_session_ready(ApplicationState*) {}
+
+	// Called once per frame after xrWaitFrame.
+	virtual void on_frame(ApplicationState*, XrTime) {}
+
+	// Called for each XrEventDataBuffer polled from the runtime.
+	virtual void on_event(ApplicationState*, XrEventDataBuffer*) {}
+
+	// Called on shutdown.
+	virtual void cleanup(ApplicationState*) {}
+
+	virtual ~Extension() = default;
 };
-static XrResult
-init_opengl_fp(XrInstance instance, struct base_extension_t* base)
-{
-	struct opengl_t* opengl = (struct opengl_t*)base;
-	LOAD_OR_RETURN(xrGetOpenGLGraphicsRequirementsKHR, opengl)
-	return XR_SUCCESS;
-}
-static bool
-init_opengl_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct opengl_t)));
-	(*out_base)->ext_name_string = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
-	(*out_base)->init_fp = &init_opengl_fp;
 
-	return true;
-}
+// --- XR_KHR_opengl_enable -----------------------------------------------------
 
-// EGL does not have function pointers and we don't store associated state here
-static bool
-init_egl_t(struct base_extension_t** out_base)
+struct ExtOpenGL : Extension
 {
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct base_extension_t)));
+	ExtOpenGL() { name = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME; }
+
+	PFN_xrGetOpenGLGraphicsRequirementsKHR xrGetOpenGLGraphicsRequirementsKHR = nullptr;
+
+	XrResult
+	load_fps(XrInstance instance) override
+	{
+		LOAD_OR_RETURN(xrGetOpenGLGraphicsRequirementsKHR, this)
+		return XR_SUCCESS;
+	}
+};
+
+// --- XR_MNDX_egl_enable -------------------------------------------------------
+
+struct ExtEGL : Extension
+{
+	ExtEGL()
+	{
 #ifdef XR_USE_PLATFORM_EGL
-	(*out_base)->ext_name_string = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
+		name = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
 #else
-	// just a random string that will never be accidentally a valid extension name
-	(*out_base)->ext_name_string = "INVALID_EXTENSION";
+		// just a random string that will never accidentally match a valid extension name
+		name = "INVALID_EXTENSION";
 #endif
-	(*out_base)->init_fp = NULL;
+	}
+};
 
-	return true;
-}
+// --- XR_EXT_hand_tracking -----------------------------------------------------
 
-
-struct hand_tracking_t
+struct ExtHandTracking : Extension
 {
-	struct base_extension_t base;
+	ExtHandTracking() { name = XR_EXT_HAND_TRACKING_EXTENSION_NAME; }
 
 	// whether the current VR system in use has hand tracking
-	bool system_supported;
-	XrHandTrackerEXT trackers[HAND_COUNT];
+	bool system_supported = false;
+	XrHandTrackerEXT trackers[HAND_COUNT] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
 
 	// out data
-	XrHandJointLocationEXT joints[HAND_COUNT][XR_HAND_JOINT_COUNT_EXT];
-	XrHandJointLocationsEXT joint_locations[HAND_COUNT];
+	XrHandJointLocationEXT joints[HAND_COUNT][XR_HAND_JOINT_COUNT_EXT] = {};
+	XrHandJointLocationsEXT joint_locations[HAND_COUNT] = {};
 
 	// optional
-	XrHandJointVelocitiesEXT joint_velocities[HAND_COUNT];
-	XrHandJointVelocityEXT joint_velocities_arr[HAND_COUNT][XR_HAND_JOINT_COUNT_EXT];
+	XrHandJointVelocitiesEXT joint_velocities[HAND_COUNT] = {};
+	XrHandJointVelocityEXT joint_velocities_arr[HAND_COUNT][XR_HAND_JOINT_COUNT_EXT] = {};
 
-	PFN_xrLocateHandJointsEXT xrLocateHandJointsEXT;
-	PFN_xrCreateHandTrackerEXT xrCreateHandTrackerEXT;
+	PFN_xrLocateHandJointsEXT xrLocateHandJointsEXT = nullptr;
+	PFN_xrCreateHandTrackerEXT xrCreateHandTrackerEXT = nullptr;
+
+	XrResult
+	load_fps(XrInstance instance) override
+	{
+		LOAD_OR_RETURN(xrLocateHandJointsEXT, this)
+		LOAD_OR_RETURN(xrCreateHandTrackerEXT, this)
+		return XR_SUCCESS;
+	}
 };
-static XrResult
-init_hand_tracking_fp(XrInstance instance, struct base_extension_t* base)
-{
-	struct hand_tracking_t* hand_tracking = (struct hand_tracking_t*)base;
-	LOAD_OR_RETURN(xrLocateHandJointsEXT, hand_tracking)
-	LOAD_OR_RETURN(xrCreateHandTrackerEXT, hand_tracking)
-	return XR_SUCCESS;
-}
-static bool
-init_hand_tracking_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct hand_tracking_t)));
 
-	(*out_base)->ext_name_string = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
-	(*out_base)->init_fp = &init_hand_tracking_fp;
-	return true;
-}
+// --- XR_KHR_composition_layer_depth -------------------------------------------
 
-
-struct depth_t
+struct ExtDepth : Extension
 {
-	struct base_extension_t base;
-	XrCompositionLayerDepthInfoKHR* infos;
+	ExtDepth() { name = XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME; }
+
+	XrCompositionLayerDepthInfoKHR* infos = nullptr;
 };
-static bool
-init_depth_t(struct base_extension_t** out_base)
+
+// --- XR_FB_display_refresh_rate -----------------------------------------------
+
+struct ExtRefreshRate : Extension
 {
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct depth_t)));
+	ExtRefreshRate() { name = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME; }
 
-	(*out_base)->ext_name_string = XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME;
-	(*out_base)->init_fp = NULL;
-	return true;
-}
+	PFN_xrEnumerateDisplayRefreshRatesFB xrEnumerateDisplayRefreshRatesFB = nullptr;
+	PFN_xrGetDisplayRefreshRateFB xrGetDisplayRefreshRateFB = nullptr;
+	PFN_xrRequestDisplayRefreshRateFB xrRequestDisplayRefreshRateFB = nullptr;
 
-
-struct refresh_rate_t
-{
-	struct base_extension_t base;
-	PFN_xrEnumerateDisplayRefreshRatesFB xrEnumerateDisplayRefreshRatesFB;
-	PFN_xrGetDisplayRefreshRateFB xrGetDisplayRefreshRateFB;
-	PFN_xrRequestDisplayRefreshRateFB xrRequestDisplayRefreshRateFB;
+	XrResult
+	load_fps(XrInstance instance) override
+	{
+		LOAD_OR_RETURN(xrEnumerateDisplayRefreshRatesFB, this)
+		LOAD_OR_RETURN(xrGetDisplayRefreshRateFB, this)
+		LOAD_OR_RETURN(xrRequestDisplayRefreshRateFB, this)
+		return XR_SUCCESS;
+	}
 };
-static XrResult
-init_refresh_rate_fp(XrInstance instance, struct base_extension_t* base)
-{
-	struct refresh_rate_t* refresh_rate = (struct refresh_rate_t*)base;
-	LOAD_OR_RETURN(xrEnumerateDisplayRefreshRatesFB, refresh_rate)
-	LOAD_OR_RETURN(xrGetDisplayRefreshRateFB, refresh_rate)
-	LOAD_OR_RETURN(xrRequestDisplayRefreshRateFB, refresh_rate)
-	return XR_SUCCESS;
-}
-static bool
-init_refresh_rate_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct refresh_rate_t)));
 
-	(*out_base)->ext_name_string = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
-	(*out_base)->init_fp = &init_refresh_rate_fp;
-	return true;
-}
+// --- XR_EXT_plane_detection ---------------------------------------------------
 
 struct polygon_t
 {
@@ -943,84 +932,56 @@ struct plane_data_t
 	struct polygon_t* polygons;
 	struct plane_data_t* next;
 };
-struct plane_detection_t
+
+struct ExtPlaneDet : Extension
 {
-	struct base_extension_t base;
+	ExtPlaneDet() { name = XR_EXT_PLANE_DETECTION_EXTENSION_NAME; }
 
-	PFN_xrCreatePlaneDetectorEXT xrCreatePlaneDetectorEXT;
-	PFN_xrDestroyPlaneDetectorEXT xrDestroyPlaneDetectorEXT;
-	PFN_xrBeginPlaneDetectionEXT xrBeginPlaneDetectionEXT;
-	PFN_xrGetPlaneDetectionStateEXT xrGetPlaneDetectionStateEXT;
-	PFN_xrGetPlaneDetectionsEXT xrGetPlaneDetectionsEXT;
-	PFN_xrGetPlanePolygonBufferEXT xrGetPlanePolygonBufferEXT;
+	PFN_xrCreatePlaneDetectorEXT xrCreatePlaneDetectorEXT = nullptr;
+	PFN_xrDestroyPlaneDetectorEXT xrDestroyPlaneDetectorEXT = nullptr;
+	PFN_xrBeginPlaneDetectionEXT xrBeginPlaneDetectionEXT = nullptr;
+	PFN_xrGetPlaneDetectionStateEXT xrGetPlaneDetectionStateEXT = nullptr;
+	PFN_xrGetPlaneDetectionsEXT xrGetPlaneDetectionsEXT = nullptr;
+	PFN_xrGetPlanePolygonBufferEXT xrGetPlanePolygonBufferEXT = nullptr;
 
-	XrPlaneDetectorEXT pd;
-	XrPlaneDetectionStateEXT state;
+	XrPlaneDetectorEXT pd = XR_NULL_HANDLE;
+	XrPlaneDetectionStateEXT state = XR_PLANE_DETECTION_STATE_NONE_EXT;
+	XrPlaneDetectorLocationsEXT locs = {
+	    .type = XR_TYPE_PLANE_DETECTOR_LOCATIONS_EXT,
+	    .planeLocationCapacityInput = 0,
+	    .planeLocationCountOutput = 0,
+	    .planeLocations = nullptr,
+	};
+	struct plane_data_t* plane_data_list = nullptr;
 
-	XrPlaneDetectorLocationsEXT locs;
-
-	struct plane_data_t* plane_data_list;
+	XrResult
+	load_fps(XrInstance instance) override
+	{
+		LOAD_OR_RETURN(xrCreatePlaneDetectorEXT, this)
+		LOAD_OR_RETURN(xrDestroyPlaneDetectorEXT, this)
+		LOAD_OR_RETURN(xrBeginPlaneDetectionEXT, this)
+		LOAD_OR_RETURN(xrGetPlaneDetectionStateEXT, this)
+		LOAD_OR_RETURN(xrGetPlaneDetectionsEXT, this)
+		LOAD_OR_RETURN(xrGetPlanePolygonBufferEXT, this)
+		return XR_SUCCESS;
+	}
 };
-static XrResult
-init_plane_detection_fp(XrInstance instance, struct base_extension_t* base)
+
+// --- XR_EXT_hand_interaction --------------------------------------------------
+
+struct ExtHandInteraction : Extension
 {
-	struct plane_detection_t* plane_detection = (struct plane_detection_t*)base;
-	LOAD_OR_RETURN(xrCreatePlaneDetectorEXT, plane_detection)
-	LOAD_OR_RETURN(xrDestroyPlaneDetectorEXT, plane_detection)
-	LOAD_OR_RETURN(xrBeginPlaneDetectionEXT, plane_detection)
-	LOAD_OR_RETURN(xrGetPlaneDetectionStateEXT, plane_detection)
-	LOAD_OR_RETURN(xrGetPlaneDetectionsEXT, plane_detection)
-	LOAD_OR_RETURN(xrGetPlanePolygonBufferEXT, plane_detection)
-
-	return XR_SUCCESS;
-}
-static bool
-init_plane_detection_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct plane_detection_t)));
-
-	(*out_base)->ext_name_string = XR_EXT_PLANE_DETECTION_EXTENSION_NAME;
-	(*out_base)->init_fp = &init_plane_detection_fp;
-
-	struct plane_detection_t* pd = (struct plane_detection_t*)*out_base;
-	pd->pd = XR_NULL_HANDLE;
-	pd->state = XR_PLANE_DETECTION_STATE_NONE_EXT;
-	pd->locs.planeLocationCountOutput = 0;
-	pd->locs.planeLocationCapacityInput = 0;
-	pd->locs.planeLocations = NULL;
-
-	return true;
-}
-
-#define PFN_DECL(FUNCTION) PFN_##FUNCTION FUNCTION
-
-struct hand_interaction_t
-{
-	struct base_extension_t base;
+	ExtHandInteraction() { name = XR_EXT_HAND_INTERACTION_EXTENSION_NAME; }
 };
-static bool
-init_hand_interaction_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct hand_interaction_t)));
 
-	(*out_base)->ext_name_string = XR_EXT_HAND_INTERACTION_EXTENSION_NAME;
-	(*out_base)->init_fp = NULL;
-	return true;
-}
+// --- XR_EXT_user_presence -----------------------------------------------------
 
-struct user_presence_t
+struct ExtUserPresence : Extension
 {
-	struct base_extension_t base;
+	ExtUserPresence() { name = XR_EXT_USER_PRESENCE_EXTENSION_NAME; }
 };
-static bool
-init_user_presence_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct user_presence_t)));
 
-	(*out_base)->ext_name_string = XR_EXT_USER_PRESENCE_EXTENSION_NAME;
-	(*out_base)->init_fp = NULL;
-	return true;
-}
+// --- XR_MNDX_xdev_space -------------------------------------------------------
 
 // wrapper struct to store everything related to one xdev
 struct xdev_space_element
@@ -1030,269 +991,64 @@ struct xdev_space_element
 	XrSpace space;
 	struct xdev_space_element* next;
 };
-void
-destroy_xdev_space(XrInstance instance, struct xdev_space_element** element)
+
+struct ExtXDevSpace : Extension
 {
-	if ((*element)->space != XR_NULL_HANDLE) {
+	ExtXDevSpace() { name = XR_MNDX_XDEV_SPACE_EXTENSION_NAME; }
 
-		XrResult result = xrDestroySpace((*element)->space);
+	PFN_xrCreateXDevListMNDX xrCreateXDevListMNDX = nullptr;
+	PFN_xrGetXDevListGenerationNumberMNDX xrGetXDevListGenerationNumberMNDX = nullptr;
+	PFN_xrEnumerateXDevsMNDX xrEnumerateXDevsMNDX = nullptr;
+	PFN_xrGetXDevPropertiesMNDX xrGetXDevPropertiesMNDX = nullptr;
+	PFN_xrDestroyXDevListMNDX xrDestroyXDevListMNDX = nullptr;
+	PFN_xrCreateXDevSpaceMNDX xrCreateXDevSpaceMNDX = nullptr;
 
-		// can't really do anything about it
-		xr_check(NULL, result, "Failed to destroy xdev space");
-	}
-
-	free(*element);
-	*element = NULL;
-}
-void
-destroy_xdev_space_list(XrInstance instance, struct xdev_space_element** list)
-{
-	struct xdev_space_element* element = *list;
-
-	while (element) {
-		struct xdev_space_element* next = element->next;
-
-		destroy_xdev_space(instance, &element);
-
-		element = next;
-	}
-	*list = NULL;
-}
-bool
-try_move(struct xdev_space_element** old_list,
-         struct xdev_space_element** new_list,
-         XrXDevPropertiesMNDX* prop)
-{
-	// remove the element from old_list, if any, and cache it in removed_element
-	struct xdev_space_element* removed_element = NULL;
-	{
-		struct xdev_space_element* prev = NULL;
-		struct xdev_space_element* current = *old_list;
-		while (current) {
-			// serial is supposed to be globally unique in monado
-			if (strcmp(current->xprops.serial, prop->serial) == 0) {
-				printf("Keeping xdev %s [%s] alive", prop->name, prop->serial);
-				if (prev == NULL) {
-					*old_list = current->next;
-				} else {
-					prev->next = current->next;
-				}
-				removed_element = current;
-				break;
-			}
-			prev = current;
-			current = current->next;
-		}
-	}
-
-	// if an element has been removed from old_list, add it to new_list and return true to indicate
-	// the element was found
-	if (removed_element) {
-		// prepend for simplicity
-		removed_element->next = *new_list;
-		*new_list = removed_element;
-		return true;
-	}
-
-	return false;
-}
-
-struct xdev_space_t
-{
-	struct base_extension_t base;
-
-	PFN_xrCreateXDevListMNDX xrCreateXDevListMNDX;
-	PFN_xrGetXDevListGenerationNumberMNDX xrGetXDevListGenerationNumberMNDX;
-	PFN_xrEnumerateXDevsMNDX xrEnumerateXDevsMNDX;
-	PFN_xrGetXDevPropertiesMNDX xrGetXDevPropertiesMNDX;
-	PFN_xrDestroyXDevListMNDX xrDestroyXDevListMNDX;
-	PFN_xrCreateXDevSpaceMNDX xrCreateXDevSpaceMNDX;
-
-	struct xdev_space_element* xdev_space_list;
+	struct xdev_space_element* xdev_space_list = nullptr;
 
 	// only need to check for new/disappeared xdevs when the generation id changes
-	uint64_t last_generation_id;
+	uint64_t last_generation_id = 0;
 
-	// true if both the runtime supports the extension and the current system (hardware) in use
-	// supports it too.
-	bool system_supported;
+	// true if both the runtime supports the extension and the current system (hardware) supports it
+	bool system_supported = false;
+
+	XrResult
+	load_fps(XrInstance instance) override
+	{
+		LOAD_OR_RETURN(xrCreateXDevListMNDX, this)
+		LOAD_OR_RETURN(xrGetXDevListGenerationNumberMNDX, this)
+		LOAD_OR_RETURN(xrEnumerateXDevsMNDX, this)
+		LOAD_OR_RETURN(xrGetXDevPropertiesMNDX, this)
+		LOAD_OR_RETURN(xrDestroyXDevListMNDX, this)
+		LOAD_OR_RETURN(xrCreateXDevSpaceMNDX, this)
+		return XR_SUCCESS;
+	}
 };
-static XrResult
-init_xdev_space_fp(XrInstance instance, struct base_extension_t* base)
-{
-	struct xdev_space_t* xdev_space = (struct xdev_space_t*)base;
-	LOAD_OR_RETURN(xrCreateXDevListMNDX, xdev_space)
-	LOAD_OR_RETURN(xrGetXDevListGenerationNumberMNDX, xdev_space)
-	LOAD_OR_RETURN(xrEnumerateXDevsMNDX, xdev_space)
-	LOAD_OR_RETURN(xrGetXDevPropertiesMNDX, xdev_space)
-	LOAD_OR_RETURN(xrDestroyXDevListMNDX, xdev_space)
-	LOAD_OR_RETURN(xrCreateXDevSpaceMNDX, xdev_space)
-	return XR_SUCCESS;
-}
-static bool
-init_xdev_space_t(struct base_extension_t** out_base)
-{
-	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct xdev_space_t)));
 
-	(*out_base)->ext_name_string = XR_MNDX_XDEV_SPACE_EXTENSION_NAME;
-	(*out_base)->init_fp = init_xdev_space_fp;
+// --- Extension registry -------------------------------------------------------
 
-	((struct xdev_space_t*)*out_base)->xdev_space_list = NULL;
-	((struct xdev_space_t*)*out_base)->last_generation_id = 0;
-	((struct xdev_space_t*)*out_base)->system_supported = false;
-
-	return true;
-}
-bool
-cleanup_update_xdev_spaces(XrInstance instance,
-                           XrSession session,
-                           struct xdev_space_t* xdev_space,
-                           XrXDevListMNDX* list,
-                           XrXDevIdMNDX** xdevs,
-                           struct xdev_space_element** old_list)
-{
-	XrResult result = XR_SUCCESS;
-
-	// everything we knew from last time has been moved to the new list, so we can destroy everything
-	// that is still on the old list
-	destroy_xdev_space_list(instance, old_list);
-
-	if (*list != XR_NULL_HANDLE) {
-		result = xdev_space->xrDestroyXDevListMNDX(*list);
-		xr_check(instance, result, "Failed to destroy xdev space list"); // we don't care
-		*list = XR_NULL_HANDLE;
-		// printf("Destroyed xdev list\n");
-	}
-
-	free(*xdevs);
-	*xdevs = NULL;
-	return true;
-}
-bool
-update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* xdev_space)
-{
-	XrResult result = XR_SUCCESS;
-	XrXDevIdMNDX* xdevs = NULL;
-	struct xdev_space_element* old_list = NULL;
-
-	XrXDevListMNDX list = XR_NULL_HANDLE;
-	XrCreateXDevListInfoMNDX create_info = {
-	    .type = XR_TYPE_CREATE_XDEV_LIST_INFO_MNDX,
-	    .next = nullptr,
-	};
-	result = xdev_space->xrCreateXDevListMNDX(session, &create_info, &list);
-	if (!xr_check(instance, result, "Failed to create xdev list")) {
-		return false;
-	}
-
-	uint64_t generation = 0;
-	result = xdev_space->xrGetXDevListGenerationNumberMNDX(list, &generation);
-	if (!xr_check(NULL, result, "Failed to get xdev list generation")) {
-		return false;
-	}
-
-	// no new or disappeared xdevs, nothing to do
-	if (generation == xdev_space->last_generation_id) {
-		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-		// printf("xdev list generation unchanged: %lu\n", generation);
-		return true;
-	}
-
-	printf("xdev list generation changed: %lu -> %lu\n", xdev_space->last_generation_id, generation);
-
-	uint32_t count = 0;
-	result = xdev_space->xrEnumerateXDevsMNDX(list, 0, &count, NULL);
-	if (!xr_check(instance, result, "Failed to enumerate xdev list capacity")) {
-		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-		return false;
-	}
-
-	assert(count > 0);
-
-	xdevs = static_cast<XrXDevIdMNDX*>(malloc(sizeof(XrXDevIdMNDX) * count));
-
-	result = xdev_space->xrEnumerateXDevsMNDX(list, count, &count, xdevs);
-	if (!xr_check(instance, result, "Failed to enumerate xdev list")) {
-		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-		return false;
-	}
-
-	printf("enumerated %d devices\n", count);
-
-	// crude: if we recognize an xdev id from the previous generation, just pick it out of the old
-	// list into the new one to avoid recreating XrSpace etc.
-	old_list = xdev_space->xdev_space_list;
-	xdev_space->xdev_space_list = NULL;
-
-	for (uint32_t i = 0; i < count; i++) {
-		XrGetXDevInfoMNDX info = {
-		    .type = XR_TYPE_GET_XDEV_INFO_MNDX,
-		    .next = nullptr,
-		    .id = xdevs[i],
-		};
-		XrXDevPropertiesMNDX prop = {
-		    .type = XR_TYPE_XDEV_PROPERTIES_MNDX,
-		    .next = nullptr,
-		    .name = "",
-		    .serial = "",
-		    .canCreateSpace = false,
-		};
-
-		result = xdev_space->xrGetXDevPropertiesMNDX(list, &info, &prop);
-		if (!xr_check(instance, result, "Failed to get xdev id %lu properties", xdevs[i])) {
-			cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-			return false;
-		}
-
-		if (try_move(&old_list, &xdev_space->xdev_space_list, &prop)) {
-			// we already know this xdev, we moved it to to the new list and don't need to do anything
-			// else
-			continue;
-		}
-
-		// we did not find this xdev in the old list, meaning we haven't seen it before
-		auto* element = static_cast<xdev_space_element*>(malloc(sizeof(struct xdev_space_element)));
-		element->xid = info.id;
-		element->xprops = prop;
-		printf("\tnew xdev: %s [%s], can create space: %d\n", prop.name, prop.serial,
-		       prop.canCreateSpace);
-		if (prop.canCreateSpace) {
-			XrCreateXDevSpaceInfoMNDX space_create_info = {
-			    .type = XR_TYPE_CREATE_XDEV_SPACE_INFO_MNDX,
-			    .next = nullptr,
-			    .xdevList = list,
-			    .id = info.id,
-			    .offset = identity_pose,
-			};
-			result = xdev_space->xrCreateXDevSpaceMNDX(session, &space_create_info, &element->space);
-			if (!xr_check(instance, result, "Failed to create xdev space")) {
-				cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-				return false;
-			}
-		}
-		element->next = xdev_space->xdev_space_list;
-		xdev_space->xdev_space_list = element;
-	}
-
-	xdev_space->last_generation_id = generation;
-
-	cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
-
-	return true;
-}
-
-
-static init_ext_struct ext_init_funcs[] = {
-    &init_opengl_t,           //
-    &init_hand_tracking_t,    //
-    &init_depth_t,            //
-    &init_refresh_rate_t,     //
-    &init_plane_detection_t,  //
-    &init_hand_interaction_t, //
-    &init_user_presence_t,    //
-    &init_xdev_space_t,       //
-    &init_egl_t,              //
+static Extension* g_extensions[] = {
+    new ExtOpenGL,           //
+    new ExtHandTracking,     //
+    new ExtDepth,            //
+    new ExtRefreshRate,      //
+    new ExtPlaneDet,         //
+    new ExtHandInteraction,  //
+    new ExtUserPresence,     //
+    new ExtXDevSpace,        //
+    new ExtEGL,              //
 };
+
+// Find an extension by type. Returns nullptr if not in the registry.
+template <typename T>
+static T*
+get_ext()
+{
+	for (auto* e : g_extensions) {
+		if (auto* t = dynamic_cast<T*>(e))
+			return t;
+	}
+	return nullptr;
+}
 
 // =============================================================================
 // Section F: Core application state structs
@@ -1300,8 +1056,6 @@ static init_ext_struct ext_init_funcs[] = {
 
 struct OpenXRState
 {
-	struct base_extension_t* ext[ARRAY_SIZE(ext_init_funcs)];
-
 	XrFormFactor form_factor;
 	XrViewConfigurationType view_type;
 	XrReferenceSpaceType play_space_type;
@@ -1432,52 +1186,12 @@ struct ApplicationState
 	struct gl_renderer_t gl_renderer;
 };
 
-// Convenience function
-struct base_extension_t*
-get_ext(struct ApplicationState* app, char* ext_name_string)
-{
-	for (uint32_t i = 0; i < ARRAY_SIZE(ext_init_funcs); i++) {
-		// even using the the EXTENSION_NAME defines doesn't guarantee same string address
-		if (app->oxr.ext[i]->ext_name_string == ext_name_string ||
-		    strcmp(app->oxr.ext[i]->ext_name_string, ext_name_string) == 0) {
-			return app->oxr.ext[i];
-		}
-	}
-	return NULL;
-}
-
-static bool
-_check_extension_support(struct base_extension_t* e,
-                         XrExtensionProperties* extension_props,
-                         uint32_t ext_count)
-{
-	for (uint32_t i = 0; i < ext_count; i++) {
-		if (strcmp(e->ext_name_string, extension_props[i].extensionName) == 0) {
-			e->supported = true;
-			e->version = extension_props[i].extensionVersion;
-			return true;
-		}
-	}
-	return false;
-}
-
 // =============================================================================
 // Section G: Swapchain, action & hand-tracking helpers
 // =============================================================================
 
-static bool
-alloc_extensions(struct ApplicationState* app)
-{
-	for (uint32_t i = 0; i < ARRAY_SIZE(ext_init_funcs); i++) {
-		if (!ext_init_funcs[i](&app->oxr.ext[i])) {
-			return false;
-		}
-	}
-	return true;
-}
-
 static XrResult
-check_extensions(struct ApplicationState* app)
+check_extensions()
 {
 	XrResult result;
 
@@ -1488,10 +1202,9 @@ check_extensions(struct ApplicationState* app)
 	if (!xr_check(NULL, result, "Failed to enumerate number of extension properties"))
 		return result;
 
-
 	auto* ext_props =
 	    static_cast<XrExtensionProperties*>(malloc(sizeof(XrExtensionProperties) * ext_count));
-	for (uint16_t i = 0; i < ext_count; i++) {
+	for (uint32_t i = 0; i < ext_count; i++) {
 		// we usually have to fill in the type (for validation) and set
 		// next to NULL (or a pointer to an extension specific struct)
 		ext_props[i].type = XR_TYPE_EXTENSION_PROPERTIES;
@@ -1509,14 +1222,21 @@ check_extensions(struct ApplicationState* app)
 		printf("\t%s v%d\n", ext_props[i].extensionName, ext_props[i].extensionVersion);
 	}
 
-	for (uint32_t i = 0; i < ARRAY_SIZE(ext_init_funcs); i++) {
-		app->oxr.ext[i]->supported = _check_extension_support(app->oxr.ext[i], ext_props, ext_count);
-
-		if (app->oxr.ext[i]->init_fp == init_opengl_fp && !app->oxr.ext[i]->supported) {
-			printf("%s is required\n", app->oxr.ext[i]->ext_name_string);
-			free(ext_props);
-			return XR_ERROR_EXTENSION_NOT_PRESENT;
+	for (auto* e : g_extensions) {
+		for (uint32_t i = 0; i < ext_count; i++) {
+			if (strcmp(e->name, ext_props[i].extensionName) == 0) {
+				e->supported = true;
+				e->version = ext_props[i].extensionVersion;
+				break;
+			}
 		}
+	}
+
+	auto* opengl = get_ext<ExtOpenGL>();
+	if (opengl && !opengl->supported) {
+		printf("%s is required\n", opengl->name);
+		free(ext_props);
+		return XR_ERROR_EXTENSION_NOT_PRESENT;
 	}
 
 	free(ext_props);
@@ -1524,25 +1244,16 @@ check_extensions(struct ApplicationState* app)
 }
 
 static XrResult
-_init_extensions(struct ApplicationState* app)
+_init_extensions(XrInstance instance)
 {
-	XrResult result;
-	XrInstance instance = app->oxr.instance;
-
-	for (uint32_t i = 0; i < ARRAY_SIZE(ext_init_funcs); i++) {
-		if (app->oxr.ext[i]->supported) {
-			printf("Loading function pointers for extension %s\n", app->oxr.ext[i]->ext_name_string);
-			if (app->oxr.ext[i]->init_fp != NULL) { // some extensions need no init
-				result = app->oxr.ext[i]->init_fp(instance, app->oxr.ext[i]);
-
-				if (!xr_check(instance, result, "Failed to load function pointers for ext %s\n",
-				              app->oxr.ext[i]->ext_name_string)) {
-					return result;
-				}
-			}
+	for (auto* e : g_extensions) {
+		if (e->supported) {
+			printf("Loading function pointers for extension %s\n", e->name);
+			XrResult result = e->load_fps(instance);
+			if (!xr_check(instance, result, "Failed to load function pointers for ext %s\n", e->name))
+				return result;
 		} else {
-			printf("Not loading function pointers for unsupported extension %s\n",
-			       app->oxr.ext[i]->ext_name_string);
+			printf("Not loading function pointers for unsupported extension %s\n", e->name);
 		}
 	}
 	return XR_SUCCESS;
@@ -1870,8 +1581,204 @@ get_action_data(XrInstance instance,
 	return true;
 }
 
+// --- XR_MNDX_xdev_space helpers -----------------------------------------------
+
+void
+destroy_xdev_space(XrInstance instance, struct xdev_space_element** element)
+{
+	if ((*element)->space != XR_NULL_HANDLE) {
+		XrResult result = xrDestroySpace((*element)->space);
+		xr_check(NULL, result, "Failed to destroy xdev space"); // can't really do anything about it
+	}
+	free(*element);
+	*element = NULL;
+}
+
+void
+destroy_xdev_space_list(XrInstance instance, struct xdev_space_element** list)
+{
+	struct xdev_space_element* element = *list;
+	while (element) {
+		struct xdev_space_element* next = element->next;
+		destroy_xdev_space(instance, &element);
+		element = next;
+	}
+	*list = NULL;
+}
+
+bool
+try_move(struct xdev_space_element** old_list,
+         struct xdev_space_element** new_list,
+         XrXDevPropertiesMNDX* prop)
+{
+	// remove the element from old_list, if any, and cache it in removed_element
+	struct xdev_space_element* removed_element = NULL;
+	{
+		struct xdev_space_element* prev = NULL;
+		struct xdev_space_element* current = *old_list;
+		while (current) {
+			// serial is supposed to be globally unique in monado
+			if (strcmp(current->xprops.serial, prop->serial) == 0) {
+				printf("Keeping xdev %s [%s] alive", prop->name, prop->serial);
+				if (prev == NULL) {
+					*old_list = current->next;
+				} else {
+					prev->next = current->next;
+				}
+				removed_element = current;
+				break;
+			}
+			prev = current;
+			current = current->next;
+		}
+	}
+
+	// if an element has been removed from old_list, add it to new_list and return true
+	if (removed_element) {
+		removed_element->next = *new_list; // prepend for simplicity
+		*new_list = removed_element;
+		return true;
+	}
+	return false;
+}
+
+bool
+cleanup_update_xdev_spaces(XrInstance instance,
+                           XrSession session,
+                           struct ExtXDevSpace* xdev_space,
+                           XrXDevListMNDX* list,
+                           XrXDevIdMNDX** xdevs,
+                           struct xdev_space_element** old_list)
+{
+	XrResult result = XR_SUCCESS;
+
+	// everything we knew from last time has been moved to the new list, so we can destroy everything
+	// that is still on the old list
+	destroy_xdev_space_list(instance, old_list);
+
+	if (*list != XR_NULL_HANDLE) {
+		result = xdev_space->xrDestroyXDevListMNDX(*list);
+		xr_check(instance, result, "Failed to destroy xdev space list"); // we don't care
+		*list = XR_NULL_HANDLE;
+	}
+
+	free(*xdevs);
+	*xdevs = NULL;
+	return true;
+}
+
+bool
+update_xdev_spaces(XrInstance instance, XrSession session, struct ExtXDevSpace* xdev_space)
+{
+	XrResult result = XR_SUCCESS;
+	XrXDevIdMNDX* xdevs = NULL;
+	struct xdev_space_element* old_list = NULL;
+
+	XrXDevListMNDX list = XR_NULL_HANDLE;
+	XrCreateXDevListInfoMNDX create_info = {
+	    .type = XR_TYPE_CREATE_XDEV_LIST_INFO_MNDX,
+	    .next = nullptr,
+	};
+	result = xdev_space->xrCreateXDevListMNDX(session, &create_info, &list);
+	if (!xr_check(instance, result, "Failed to create xdev list")) {
+		return false;
+	}
+
+	uint64_t generation = 0;
+	result = xdev_space->xrGetXDevListGenerationNumberMNDX(list, &generation);
+	if (!xr_check(NULL, result, "Failed to get xdev list generation")) {
+		return false;
+	}
+
+	// no new or disappeared xdevs, nothing to do
+	if (generation == xdev_space->last_generation_id) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		return true;
+	}
+
+	printf("xdev list generation changed: %lu -> %lu\n", xdev_space->last_generation_id, generation);
+
+	uint32_t count = 0;
+	result = xdev_space->xrEnumerateXDevsMNDX(list, 0, &count, NULL);
+	if (!xr_check(instance, result, "Failed to enumerate xdev list capacity")) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		return false;
+	}
+
+	assert(count > 0);
+	xdevs = static_cast<XrXDevIdMNDX*>(malloc(sizeof(XrXDevIdMNDX) * count));
+
+	result = xdev_space->xrEnumerateXDevsMNDX(list, count, &count, xdevs);
+	if (!xr_check(instance, result, "Failed to enumerate xdev list")) {
+		cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+		return false;
+	}
+
+	printf("enumerated %d devices\n", count);
+
+	// crude: if we recognize an xdev id from the previous generation, reuse the existing space
+	old_list = xdev_space->xdev_space_list;
+	xdev_space->xdev_space_list = NULL;
+
+	for (uint32_t i = 0; i < count; i++) {
+		XrGetXDevInfoMNDX info = {
+		    .type = XR_TYPE_GET_XDEV_INFO_MNDX,
+		    .next = nullptr,
+		    .id = xdevs[i],
+		};
+		XrXDevPropertiesMNDX prop = {
+		    .type = XR_TYPE_XDEV_PROPERTIES_MNDX,
+		    .next = nullptr,
+		    .name = "",
+		    .serial = "",
+		    .canCreateSpace = false,
+		};
+
+		result = xdev_space->xrGetXDevPropertiesMNDX(list, &info, &prop);
+		if (!xr_check(instance, result, "Failed to get xdev id %lu properties", xdevs[i])) {
+			cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+			return false;
+		}
+
+		if (try_move(&old_list, &xdev_space->xdev_space_list, &prop)) {
+			// we already know this xdev, moved to new list, nothing else to do
+			continue;
+		}
+
+		// new xdev, create an element for it
+		auto* element = static_cast<xdev_space_element*>(malloc(sizeof(struct xdev_space_element)));
+		element->xid = info.id;
+		element->xprops = prop;
+		printf("\tnew xdev: %s [%s], can create space: %d\n", prop.name, prop.serial,
+		       prop.canCreateSpace);
+		if (prop.canCreateSpace) {
+			XrCreateXDevSpaceInfoMNDX space_create_info = {
+			    .type = XR_TYPE_CREATE_XDEV_SPACE_INFO_MNDX,
+			    .next = nullptr,
+			    .xdevList = list,
+			    .id = info.id,
+			    .offset = identity_pose,
+			};
+			result = xdev_space->xrCreateXDevSpaceMNDX(session, &space_create_info, &element->space);
+			if (!xr_check(instance, result, "Failed to create xdev space")) {
+				cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+				return false;
+			}
+		}
+		element->next = xdev_space->xdev_space_list;
+		xdev_space->xdev_space_list = element;
+	}
+
+	xdev_space->last_generation_id = generation;
+
+	cleanup_update_xdev_spaces(instance, session, xdev_space, &list, &xdevs, &old_list);
+	return true;
+}
+
+// --- XR_EXT_hand_tracking helpers ---------------------------------------------
+
 static bool
-create_hand_trackers(XrInstance instance, XrSession session, struct hand_tracking_t* hand_tracking)
+create_hand_trackers(XrInstance instance, XrSession session, struct ExtHandTracking* hand_tracking)
 {
 	XrResult result;
 
@@ -1910,7 +1817,7 @@ get_hand_tracking(XrInstance instance,
                   XrSpace space,
                   XrTime time,
                   bool query_joint_velocities,
-                  struct hand_tracking_t* hand_tracking,
+                  struct ExtHandTracking* hand_tracking,
                   int hand)
 {
 	if (query_joint_velocities) {
@@ -2001,10 +1908,10 @@ create_vr_swapchains(struct ApplicationState* app)
 	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_DEPTH_COMPONENT16, true);
 	if (depth_format < 0) {
 		printf("Preferred depth format GL_DEPTH_COMPONENT16 not supported, disabling depth\n");
-		struct depth_t* d =
-		    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+		struct ExtDepth* d =
+		    get_ext<ExtDepth>();
 		if (d)
-			d->base.supported = false;
+			d->supported = false;
 	}
 
 	XrSwapchainUsageFlags color_flags =
@@ -2014,9 +1921,9 @@ create_vr_swapchains(struct ApplicationState* app)
 	                                 color_format, app->oxr.viewconfig_views, color_flags))
 		return false;
 
-	struct depth_t* depth_ext =
-	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
-	if (depth_ext->base.supported) {
+	struct ExtDepth* depth_ext =
+	    get_ext<ExtDepth>();
+	if (depth_ext->supported) {
 		XrSwapchainUsageFlags depth_flags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 		if (!create_swapchain_from_views(app->oxr.instance, app->oxr.session,
 		                                 &app->vr_swapchains[SWAPCHAIN_DEPTH], app->oxr.view_count,
@@ -2051,7 +1958,7 @@ create_vr_swapchains(struct ApplicationState* app)
 		    app->oxr.viewconfig_views[i].recommendedImageRectHeight;
 	}
 
-	if (depth_ext->base.supported) {
+	if (depth_ext->supported) {
 		depth_ext->infos = (XrCompositionLayerDepthInfoKHR*)malloc(
 		    sizeof(XrCompositionLayerDepthInfoKHR) * app->oxr.view_count);
 		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
@@ -2218,9 +2125,9 @@ setup_actions(struct ApplicationState* app)
 	                     vive_bindings, ARRAY_SIZE(vive_bindings)))
 		return false;
 
-	struct hand_interaction_t* hand_interaction_ext =
-	    (struct hand_interaction_t*)get_ext(app, XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
-	if (hand_interaction_ext && hand_interaction_ext->base.supported) {
+	struct ExtHandInteraction* hand_interaction_ext =
+	    get_ext<ExtHandInteraction>();
+	if (hand_interaction_ext && hand_interaction_ext->supported) {
 		struct Binding hi_bindings[] = {
 		    {.action = app->grab_action.action,
 		     .paths = {"/user/hand/left/input/pinch_ext/value",
@@ -2240,16 +2147,16 @@ setup_actions(struct ApplicationState* app)
 
 	// --- Per-session extension setup that depends on having actions ready
 
-	struct hand_tracking_t* hand_tracking_ext =
-	    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+	struct ExtHandTracking* hand_tracking_ext =
+	    get_ext<ExtHandTracking>();
 	if (hand_tracking_ext->system_supported) {
 		if (!create_hand_trackers(app->oxr.instance, app->oxr.session, hand_tracking_ext))
 			return false;
 	}
 
-	struct plane_detection_t* plane_detection_ext =
-	    (struct plane_detection_t*)get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME);
-	if (plane_detection_ext->base.supported) {
+	struct ExtPlaneDet* plane_detection_ext =
+	    get_ext<ExtPlaneDet>();
+	if (plane_detection_ext->supported) {
 		XrPlaneDetectorCreateInfoEXT create_info = {
 		    .type = XR_TYPE_PLANE_DETECTOR_CREATE_INFO_EXT,
 		    .flags = XR_PLANE_DETECTOR_ENABLE_CONTOUR_BIT_EXT,
@@ -2267,12 +2174,12 @@ setup_actions(struct ApplicationState* app)
 static void
 cleanup_app(struct ApplicationState* app)
 {
-	struct depth_t* depth_ext =
-	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	struct ExtDepth* depth_ext =
+	    get_ext<ExtDepth>();
 
 	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
 		free(app->vr_swapchains[SWAPCHAIN_PROJECTION].images[i]);
-		if (depth_ext->base.supported)
+		if (depth_ext->supported)
 			free(app->vr_swapchains[SWAPCHAIN_DEPTH].images[i]);
 
 		glDeleteFramebuffers(app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchain_lengths[i],
@@ -2508,27 +2415,22 @@ main(int argc, char** argv)
 
 	XrResult result = XR_SUCCESS;
 
-	if (!alloc_extensions(app)) {
-		printf("allocating ext structs failed");
-		return 1;
-	}
-
-	result = check_extensions(app);
+	result = check_extensions();
 	if (!xr_check(app->oxr.instance, result, "Extensions check failed!")) {
 		return 1;
 	}
 
 	// disable extensions selectively
-	get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME)->supported = false;
+	get_ext<ExtPlaneDet>()->supported = false;
 
 	// --- Create XrInstance
 	int enabled_ext_count = 0;
-	const char* enabled_exts[ARRAY_SIZE(ext_init_funcs)] = {0};
+	const char* enabled_exts[ARRAY_SIZE(g_extensions)] = {0};
 
-	for (uint32_t i = 0; i < ARRAY_SIZE(ext_init_funcs); i++) {
-		if (app->oxr.ext[i]->supported) {
-			enabled_exts[enabled_ext_count++] = app->oxr.ext[i]->ext_name_string;
-			printf("enabling extension %s\n", app->oxr.ext[i]->ext_name_string);
+	for (uint32_t i = 0; i < ARRAY_SIZE(g_extensions); i++) {
+		if (g_extensions[i]->supported) {
+			enabled_exts[enabled_ext_count++] = g_extensions[i]->name;
+			printf("enabling extension %s\n", g_extensions[i]->name);
 		}
 	}
 
@@ -2559,7 +2461,7 @@ main(int argc, char** argv)
 	if (!xr_check(NULL, result, "Failed to create XR instance."))
 		return 1;
 
-	result = _init_extensions(app);
+	result = _init_extensions(app->oxr.instance);
 	if (!xr_check(app->oxr.instance, result, "Failed to init extensions!")) {
 		return 1;
 	}
@@ -2609,27 +2511,27 @@ main(int argc, char** argv)
 		    .graphicsProperties = {0},
 		    .trackingProperties = {0},
 		};
-		struct hand_tracking_t* ht_ext =
-		    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+		struct ExtHandTracking* ht_ext =
+		    get_ext<ExtHandTracking>();
 
 		XrSystemHandTrackingPropertiesEXT ht = {
 		    .type = XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT,
 		    .next = system_props.next,
 		};
-		if (ht_ext->base.supported) {
+		if (ht_ext->supported) {
 			system_props.next = &ht;
 		}
 
 
-		struct xdev_space_t* xdev_ext =
-		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
+		struct ExtXDevSpace* xdev_ext =
+		    get_ext<ExtXDevSpace>();
 
 		XrSystemXDevSpacePropertiesMNDX xd = {
 		    .type = XR_TYPE_SYSTEM_XDEV_SPACE_PROPERTIES_MNDX,
 		    .next = system_props.next,
 		};
 
-		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->supported) {
 			system_props.next = &xd;
 		}
 
@@ -2637,11 +2539,11 @@ main(int argc, char** argv)
 		if (!xr_check(app->oxr.instance, result, "Failed to get System properties"))
 			return 1;
 
-		if (ht_ext->base.supported) {
+		if (ht_ext->supported) {
 			ht_ext->system_supported = ht.supportsHandTracking;
 		}
 
-		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported) {
+		if (app->args.xdev_space && xdev_ext && xdev_ext->supported) {
 			xdev_ext->system_supported = xd.supportsXDevSpace;
 		}
 
@@ -2679,7 +2581,7 @@ main(int argc, char** argv)
 	                                               .next = NULL};
 
 	// this function pointer was loaded with xrGetInstanceProcAddr
-	struct opengl_t* opengl_ext = (struct opengl_t*)get_ext(app, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME);
+	struct ExtOpenGL* opengl_ext = get_ext<ExtOpenGL>();
 	result = opengl_ext->xrGetOpenGLGraphicsRequirementsKHR(app->oxr.instance, app->oxr.system_id,
 	                                                        &opengl_reqs);
 	if (!xr_check(app->oxr.instance, result, "Failed to get OpenGL graphics requirements!"))
@@ -2844,13 +2746,13 @@ main(int argc, char** argv)
 	if (!create_vr_swapchains(app))
 		return 1;
 
-	struct depth_t* depth_ext =
-	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	struct ExtDepth* depth_ext =
+	    get_ext<ExtDepth>();
 
-	struct refresh_rate_t* refresh_rate_ext =
-	    (struct refresh_rate_t*)get_ext(app, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+	struct ExtRefreshRate* refresh_rate_ext =
+	    get_ext<ExtRefreshRate>();
 	// get info from fb_refresh_rate
-	if (refresh_rate_ext->base.supported) {
+	if (refresh_rate_ext->supported) {
 		uint32_t refresh_rate_count;
 		result = refresh_rate_ext->xrEnumerateDisplayRefreshRatesFB(app->oxr.session, 0,
 		                                                            &refresh_rate_count, NULL);
@@ -2918,10 +2820,10 @@ main(int argc, char** argv)
 	XrPath* hand_paths = app->hand_paths;
 
 	// Extension pointers used throughout the render loop.
-	struct hand_tracking_t* hand_tracking_ext =
-	    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
-	struct plane_detection_t* plane_detection_ext =
-	    (struct plane_detection_t*)get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME);
+	struct ExtHandTracking* hand_tracking_ext =
+	    get_ext<ExtHandTracking>();
+	struct ExtPlaneDet* plane_detection_ext =
+	    get_ext<ExtPlaneDet>();
 
 	bool quit_renderloop = false;
 	bool session_running = false; // to avoid beginning an already running app->oxr.session
@@ -3129,9 +3031,9 @@ main(int argc, char** argv)
 
 		// Maybe updating new/disappeared xdevs is not necessary every frame. The XrSpaces are located
 		// independently.
-		struct xdev_space_t* xdev_ext =
-		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
-		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported &&
+		struct ExtXDevSpace* xdev_ext =
+		    get_ext<ExtXDevSpace>();
+		if (app->args.xdev_space && xdev_ext && xdev_ext->supported &&
 		    xdev_ext->system_supported) {
 			if (!update_xdev_spaces(app->oxr.instance, app->oxr.session, xdev_ext)) {
 				return 1;
@@ -3226,7 +3128,7 @@ main(int argc, char** argv)
 			}
 		};
 
-		if (plane_detection_ext->base.supported) {
+		if (plane_detection_ext->supported) {
 			result = plane_detection_ext->xrGetPlaneDetectionStateEXT(plane_detection_ext->pd,
 			                                                          &plane_detection_ext->state);
 			if (!xr_check(app->oxr.instance, result, "failed to query plane detector state"))
@@ -3424,7 +3326,7 @@ main(int argc, char** argv)
 			                       &app->acquired_color[i]))
 				break;
 
-			if (depth_ext->base.supported) {
+			if (depth_ext->supported) {
 				if (!acquire_swapchain(app->oxr.instance, &app->vr_swapchains[SWAPCHAIN_DEPTH], i,
 				                       &app->acquired_depth[i]))
 					break;
@@ -3436,7 +3338,7 @@ main(int argc, char** argv)
 
 		render_frame(app, &app->gl_renderer, app->oxr.frameState.predictedDisplayTime,
 		             app->hand_pose_action.pose_locations, hand_tracking_ext,
-		             depth_ext->base.supported);
+		             depth_ext->supported);
 
 		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
 			result = xrReleaseSwapchainImage(app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchains[i],
@@ -3444,7 +3346,7 @@ main(int argc, char** argv)
 			if (!xr_check(app->oxr.instance, result, "failed to release swapchain image!"))
 				break;
 
-			if (depth_ext->base.supported) {
+			if (depth_ext->supported) {
 				result = xrReleaseSwapchainImage(app->vr_swapchains[SWAPCHAIN_DEPTH].swapchains[i],
 				                                 &release_info);
 				if (!xr_check(app->oxr.instance, result, "failed to release swapchain image!"))
@@ -3908,16 +3810,16 @@ render_frame(struct ApplicationState* app,
              struct gl_renderer_t* gl_renderer,
              XrTime predictedDisplayTime,
              XrSpaceLocation* hand_locations,
-             struct hand_tracking_t* hand_tracking,
+             struct ExtHandTracking* hand_tracking,
              bool depth_supported)
 {
 	for (uint32_t view_index = 0; view_index < app->oxr.view_count; view_index++) {
 		GLuint color_image = app->vr_swapchains[SWAPCHAIN_PROJECTION]
 		                         .images[view_index][app->acquired_color[view_index]]
 		                         .image;
-		struct depth_t* depth_ext =
-		    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
-		GLuint depth_image = depth_ext->base.supported
+		struct ExtDepth* depth_ext =
+		    get_ext<ExtDepth>();
+		GLuint depth_image = depth_ext->supported
 		                         ? app->vr_swapchains[SWAPCHAIN_DEPTH]
 		                               .images[view_index][app->acquired_depth[view_index]]
 		                               .image
@@ -4024,7 +3926,7 @@ render_frame(struct ApplicationState* app,
 				glUniform4f(gl_renderer->colorLoc, 0.5, 1.0, 0.5, 1.0);
 			}
 
-			if (hand_tracking && hand_tracking->base.supported && hand_tracking->system_supported) {
+			if (hand_tracking && hand_tracking->supported && hand_tracking->system_supported) {
 				struct XrHandJointLocationsEXT* joint_locations = &hand_tracking->joint_locations[hand];
 				if (joint_locations->isActive) {
 					for (uint32_t i = 0; i < joint_locations->jointCount; i++) {
@@ -4109,9 +4011,9 @@ render_frame(struct ApplicationState* app,
 			}
 		}
 
-		struct xdev_space_t* xdev_ext =
-		    (struct xdev_space_t*)get_ext(app, XR_MNDX_XDEV_SPACE_EXTENSION_NAME);
-		if (app->args.xdev_space && xdev_ext && xdev_ext->base.supported &&
+		struct ExtXDevSpace* xdev_ext =
+		    get_ext<ExtXDevSpace>();
+		if (app->args.xdev_space && xdev_ext && xdev_ext->supported &&
 		    xdev_ext->system_supported) {
 			glUniform4f(gl_renderer->colorLoc, 1.0, 1.0, 0.5, 1.0);
 
