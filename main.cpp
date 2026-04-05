@@ -7,6 +7,10 @@
  * @author Christoph Haag <christoph.haag@collabora.com>
  */
 
+// =============================================================================
+// Section A: Platform includes & GL function loader
+// =============================================================================
+
 #include <assert.h>
 #include <getopt.h>
 #include <math.h>
@@ -199,6 +203,9 @@ XR_MACROS(XrResult)                     //
     XR_MACROS(XrEnvironmentBlendMode)   //
     XR_MACROS(XrPlaneDetectionStateEXT) //
 
+// =============================================================================
+// Section B: Constants & shared types
+// =============================================================================
 
 #define degrees_to_radians(angle_degrees) ((angle_degrees) * M_PI / 180.0)
 #define radians_to_degrees(angle_radians) ((angle_radians) * 180.0 / M_PI)
@@ -232,8 +239,7 @@ static constexpr float SCENE_CUBE_HEIGHT = 0.5f;
 static constexpr float FLOOR_SIZE = 1.0f;
 
 // =============================================================================
-// math code adapted from
-// https://github.com/KhronosGroup/OpenXR-SDK-Source/blob/master/src/common/xr_linear.h
+// Section C: Math (adapted from OpenXR-SDK-Source/src/common/xr_linear.h)
 // Copyright (c) 2017 The Khronos Group Inc.
 // Copyright (c) 2016 Oculus VR, LLC.
 // SPDX-License-Identifier: Apache-2.0
@@ -496,7 +502,7 @@ XrMatrix4x4f_CreateModelMatrix(XrMatrix4x4f* result,
 
 
 // =============================================================================
-// OpenGL rendering code at the end of the file
+// Section D: OpenXR utilities (xr_check, print helpers, swapchain format)
 // =============================================================================
 struct gl_renderer_t
 {
@@ -765,6 +771,17 @@ get_swapchain_format(XrInstance instance,
 
 	return chosen_format;
 }
+
+// =============================================================================
+// Section E: Extension registry
+// =============================================================================
+// To add a new extension:
+//   1. Define a struct that embeds base_extension_t as its first member.
+//   2. Write init_<name>_t() to fill ext_name_string and init_fp.
+//   3. (If needed) write init_<name>_fp() to load function pointers.
+//   4. Add &init_<name>_t to ext_init_funcs[].
+//   5. Cast get_ext() result to your struct type where you need it.
+// =============================================================================
 
 struct base_extension_t;
 
@@ -1277,6 +1294,10 @@ static init_ext_struct ext_init_funcs[] = {
     &init_egl_t,              //
 };
 
+// =============================================================================
+// Section F: Core application state structs
+// =============================================================================
+
 struct OpenXRState
 {
 	struct base_extension_t* ext[ARRAY_SIZE(ext_init_funcs)];
@@ -1435,6 +1456,10 @@ _check_extension_support(struct base_extension_t* e,
 	}
 	return false;
 }
+
+// =============================================================================
+// Section G: Swapchain, action & hand-tracking helpers
+// =============================================================================
 
 static bool
 alloc_extensions(struct ApplicationState* app)
@@ -2037,6 +2062,10 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 		}
 	}
 }
+
+// =============================================================================
+// Section H: Application lifecycle (main)
+// =============================================================================
 
 int
 main(int argc, char** argv)
@@ -3506,7 +3535,7 @@ main(int argc, char** argv)
 
 
 // =============================================================================
-// OpenGL rendering code
+// Section I: OpenGL renderer (SDL window, shaders, render functions)
 // =============================================================================
 
 // Header-only math library for rendering transforms.
@@ -3816,7 +3845,7 @@ visualize_velocity(XrPosef* base,
 	float block_radius = lin_len / 2.;
 	XrVector3f lin_direction = vec3_norm(linearVelocity);
 
-#if 0
+#if 0 // OPTION: visualize velocity as a chain of discrete cubes instead of one elongated block
 	for (float i = 0; i < lin_len / size; i++) {
 		XrVector3f pos = base->position;
 		pos.x += lin_direction.x * size * i;
@@ -3828,7 +3857,7 @@ visualize_velocity(XrPosef* base,
 
 
 // linear velocity
-#if 1
+#if 1 // OPTION: disable to skip linear velocity arrow rendering entirely
 	{
 		/* create matrix that translates lin_len / 2. in lin_direction (because
 		 * block origin is in the middle), scales to lin_len in "z" direction and
@@ -3850,8 +3879,9 @@ visualize_velocity(XrPosef* base,
 	}
 #endif
 
-// angular velocity - block is axis, length is velocity
-#if 0
+// angular velocity - block is axis, length is velocity magnitude
+// Enable to render angular velocity in addition to linear velocity.
+#if 0 // OPTION: visualize angular velocity as an additional arrow
 {
 HMM_Vec3 from = HMM_V3(0, 0, 0);
 HMM_Vec3 to = HMM_V3(angularVelocity->x / 2., angularVelocity->y / 2., angularVelocity->z / 2.0);
