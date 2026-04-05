@@ -1,0 +1,17 @@
+HandmadeMath Attribution
+========================
+
+This project vendors HandmadeMath in:
+- external/HandmadeMath.h
+
+Upstream project:
+- https://github.com/HandmadeMath/HandmadeMath
+
+Source used:
+- https://raw.githubusercontent.com/HandmadeMath/HandmadeMath/master/HandmadeMath.h
+- Downloaded on 2026-04-05.
+
+License:
+- CC0-1.0 (public domain dedication / fallback permissive license)
+- Full license text is included in:
+  external/HandmadeMath.LICENSE

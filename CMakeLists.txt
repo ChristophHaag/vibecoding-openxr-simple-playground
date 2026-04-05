@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.12)
 
+set(CMAKE_CXX_STANDARD 20)
+
 if (EXISTS "${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
   MESSAGE("Using vcpkg in ${CMAKE_SOURCE_DIR}/vcpkg")
   set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake)
@@ -32,7 +34,7 @@ ELSE()
 	PKG_SEARCH_MODULE(SDL2 REQUIRED sdl2)
 ENDIF()
 
-add_executable(openxr-playground main.c ${EXTRA_SOURCES})
+add_executable(openxr-playground main.cpp ${EXTRA_SOURCES})
 
 find_package(OpenGL REQUIRED)
 

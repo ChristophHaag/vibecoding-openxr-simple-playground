@@ -154,7 +154,7 @@ Example of how to use expansion macros to make an enum-to-string function:
 #define XR_ENUM_CASE_STR(name, val)                                                                \
 	case name: return #name;
 #define XR_ENUM_STR(enumType)                                                                      \
-	const char* XrStr_##enumType(uint64_t e)                                                         \
+	const char* XrStr_##enumType(uint64_t e)                                                          \
 	{                                                                                                \
 		switch (e) {                                                                                   \
 			XR_LIST_ENUM_##enumType(XR_ENUM_CASE_STR) default : return "Unknown";                        \
@@ -193,15 +193,17 @@ XR_MACROS(XrResult)                     //
     XR_MACROS(XrEnvironmentBlendMode)   //
     XR_MACROS(XrPlaneDetectionStateEXT) //
 
-    typedef const char* (*XrStr_fn)(long value);
+	typedef const char* (*XrStr_fn)(long value);
 
 
 #define degrees_to_radians(angle_degrees) ((angle_degrees) * M_PI / 180.0)
 #define radians_to_degrees(angle_radians) ((angle_radians) * 180.0 / M_PI)
 
-// we need an identity pose for creating spaces without offsets
-static XrPosef identity_pose = {.orientation = {.x = 0, .y = 0, .z = 0, .w = 1.0},
-                                .position = {.x = 0, .y = 0, .z = 0}};
+    // we need an identity pose for creating spaces without offsets
+    static XrPosef identity_pose = {
+	    .orientation = {.x = 0, .y = 0, .z = 0, .w = 1.0},
+	    .position = {.x = 0, .y = 0, .z = 0}
+    };
 
 #define HAND_LEFT_INDEX 0
 #define HAND_RIGHT_INDEX 1
@@ -565,7 +567,7 @@ print_system_properties(XrSystemProperties* system_properties)
 	printf("\tOrientation Tracking: %d\n", system_properties->trackingProperties.orientationTracking);
 	printf("\tPosition Tracking   : %d\n", system_properties->trackingProperties.positionTracking);
 
-	const XrBaseInStructure* next = system_properties->next;
+	const XrBaseInStructure* next = static_cast<const XrBaseInStructure*>(system_properties->next);
 	while (next) {
 		if (next->type == XR_TYPE_SYSTEM_HAND_TRACKING_PROPERTIES_EXT) {
 			XrSystemHandTrackingPropertiesEXT* ht = (XrSystemHandTrackingPropertiesEXT*)next;
@@ -599,8 +601,12 @@ print_supported_view_configs(XrInstance instance, XrSystemId system_id)
 		return;
 
 	for (uint32_t i = 0; i < view_config_count; ++i) {
-		XrViewConfigurationProperties props = {.type = XR_TYPE_VIEW_CONFIGURATION_PROPERTIES,
-		                                       .next = NULL};
+		XrViewConfigurationProperties props{
+		    .type = XR_TYPE_VIEW_CONFIGURATION_PROPERTIES,
+		    .next = nullptr,
+		    .viewConfigurationType = view_configs[i],
+		    .fovMutable = false,
+		};
 
 		result = xrGetViewConfigurationProperties(instance, system_id, view_configs[i], &props);
 		if (!xr_check(instance, result, "Failed to get view configuration info %d!", i))
@@ -636,7 +642,8 @@ print_reference_spaces(XrInstance instance, XrSession session)
 	if (!xr_check(instance, result, "Getting number of reference spaces failed!"))
 		return;
 
-	XrReferenceSpaceType* ref_spaces = malloc(sizeof(XrReferenceSpaceType) * ref_space_count);
+	auto* ref_spaces =
+	    static_cast<XrReferenceSpaceType*>(malloc(sizeof(XrReferenceSpaceType) * ref_space_count));
 	result = xrEnumerateReferenceSpaces(session, ref_space_count, &ref_space_count, ref_spaces);
 	if (!xr_check(instance, result, "Enumerating reference spaces failed!"))
 		return;
@@ -696,7 +703,7 @@ get_swapchain_format(XrInstance instance,
 		return -1;
 
 	printf("Runtime supports %d swapchain formats\n", swapchain_format_count);
-	int64_t* swapchain_formats = malloc(sizeof(int64_t) * swapchain_format_count);
+	auto* swapchain_formats = static_cast<int64_t*>(malloc(sizeof(int64_t) * swapchain_format_count));
 	result = xrEnumerateSwapchainFormats(session, swapchain_format_count, &swapchain_format_count,
 	                                     swapchain_formats);
 	if (!xr_check(instance, result, "Failed to enumerate swapchain formats"))
@@ -765,7 +772,7 @@ init_opengl_fp(XrInstance instance, struct base_extension_t* base)
 static bool
 init_opengl_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct opengl_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct opengl_t)));
 	(*out_base)->ext_name_string = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
 	(*out_base)->init_fp = &init_opengl_fp;
 
@@ -776,7 +783,7 @@ init_opengl_t(struct base_extension_t** out_base)
 static bool
 init_egl_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct base_extension_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct base_extension_t)));
 #ifdef XR_USE_PLATFORM_EGL
 	(*out_base)->ext_name_string = XR_MNDX_EGL_ENABLE_EXTENSION_NAME;
 #else
@@ -819,7 +826,7 @@ init_hand_tracking_fp(XrInstance instance, struct base_extension_t* base)
 static bool
 init_hand_tracking_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct hand_tracking_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct hand_tracking_t)));
 
 	(*out_base)->ext_name_string = XR_EXT_HAND_TRACKING_EXTENSION_NAME;
 	(*out_base)->init_fp = &init_hand_tracking_fp;
@@ -835,7 +842,7 @@ struct depth_t
 static bool
 init_depth_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct depth_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct depth_t)));
 
 	(*out_base)->ext_name_string = XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME;
 	(*out_base)->init_fp = NULL;
@@ -862,7 +869,7 @@ init_refresh_rate_fp(XrInstance instance, struct base_extension_t* base)
 static bool
 init_refresh_rate_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct refresh_rate_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct refresh_rate_t)));
 
 	(*out_base)->ext_name_string = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
 	(*out_base)->init_fp = &init_refresh_rate_fp;
@@ -915,7 +922,7 @@ init_plane_detection_fp(XrInstance instance, struct base_extension_t* base)
 static bool
 init_plane_detection_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct plane_detection_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct plane_detection_t)));
 
 	(*out_base)->ext_name_string = XR_EXT_PLANE_DETECTION_EXTENSION_NAME;
 	(*out_base)->init_fp = &init_plane_detection_fp;
@@ -939,7 +946,7 @@ struct hand_interaction_t
 static bool
 init_hand_interaction_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct hand_interaction_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct hand_interaction_t)));
 
 	(*out_base)->ext_name_string = XR_EXT_HAND_INTERACTION_EXTENSION_NAME;
 	(*out_base)->init_fp = NULL;
@@ -953,7 +960,7 @@ struct user_presence_t
 static bool
 init_user_presence_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct user_presence_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct user_presence_t)));
 
 	(*out_base)->ext_name_string = XR_EXT_USER_PRESENCE_EXTENSION_NAME;
 	(*out_base)->init_fp = NULL;
@@ -1069,7 +1076,7 @@ init_xdev_space_fp(XrInstance instance, struct base_extension_t* base)
 static bool
 init_xdev_space_t(struct base_extension_t** out_base)
 {
-	*out_base = malloc(sizeof(struct xdev_space_t));
+	*out_base = static_cast<base_extension_t*>(malloc(sizeof(struct xdev_space_t)));
 
 	(*out_base)->ext_name_string = XR_MNDX_XDEV_SPACE_EXTENSION_NAME;
 	(*out_base)->init_fp = init_xdev_space_fp;
@@ -1115,6 +1122,7 @@ update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* 
 	XrXDevListMNDX list = XR_NULL_HANDLE;
 	XrCreateXDevListInfoMNDX create_info = {
 	    .type = XR_TYPE_CREATE_XDEV_LIST_INFO_MNDX,
+	    .next = nullptr,
 	};
 	result = xdev_space->xrCreateXDevListMNDX(session, &create_info, &list);
 	if (!xr_check(instance, result, "Failed to create xdev list")) {
@@ -1145,7 +1153,7 @@ update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* 
 
 	assert(count > 0);
 
-	xdevs = malloc(sizeof(XrXDevIdMNDX) * count);
+	xdevs = static_cast<XrXDevIdMNDX*>(malloc(sizeof(XrXDevIdMNDX) * count));
 
 	result = xdev_space->xrEnumerateXDevsMNDX(list, count, &count, xdevs);
 	if (!xr_check(instance, result, "Failed to enumerate xdev list")) {
@@ -1163,10 +1171,15 @@ update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* 
 	for (uint32_t i = 0; i < count; i++) {
 		XrGetXDevInfoMNDX info = {
 		    .type = XR_TYPE_GET_XDEV_INFO_MNDX,
+		    .next = nullptr,
 		    .id = xdevs[i],
 		};
 		XrXDevPropertiesMNDX prop = {
 		    .type = XR_TYPE_XDEV_PROPERTIES_MNDX,
+		    .next = nullptr,
+		    .name = "",
+		    .serial = "",
+		    .canCreateSpace = false,
 		};
 
 		result = xdev_space->xrGetXDevPropertiesMNDX(list, &info, &prop);
@@ -1182,7 +1195,7 @@ update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* 
 		}
 
 		// we did not find this xdev in the old list, meaning we haven't seen it before
-		struct xdev_space_element* element = malloc(sizeof(struct xdev_space_element));
+		auto* element = static_cast<xdev_space_element*>(malloc(sizeof(struct xdev_space_element)));
 		element->xid = info.id;
 		element->xprops = prop;
 		printf("\tnew xdev: %s [%s], can create space: %d\n", prop.name, prop.serial,
@@ -1190,9 +1203,10 @@ update_xdev_spaces(XrInstance instance, XrSession session, struct xdev_space_t* 
 		if (prop.canCreateSpace) {
 			XrCreateXDevSpaceInfoMNDX space_create_info = {
 			    .type = XR_TYPE_CREATE_XDEV_SPACE_INFO_MNDX,
+			    .next = nullptr,
 			    .xdevList = list,
-			    .offset = identity_pose,
 			    .id = info.id,
+			    .offset = identity_pose,
 			};
 			result = xdev_space->xrCreateXDevSpaceMNDX(session, &space_create_info, &element->space);
 			if (!xr_check(instance, result, "Failed to create xdev space")) {
@@ -1407,7 +1421,8 @@ check_extensions(struct ApplicationState* app)
 		return result;
 
 
-	XrExtensionProperties* ext_props = malloc(sizeof(XrExtensionProperties) * ext_count);
+	auto* ext_props =
+	    static_cast<XrExtensionProperties*>(malloc(sizeof(XrExtensionProperties) * ext_count));
 	for (uint16_t i = 0; i < ext_count; i++) {
 		// we usually have to fill in the type (for validation) and set
 		// next to NULL (or a pointer to an extension specific struct)
@@ -1479,8 +1494,9 @@ _create_swapchain(XrInstance instance,
 {
 	XrSwapchainCreateInfo swapchain_create_info = {
 	    .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-	    .usageFlags = usage_flags,
+	    .next = nullptr,
 	    .createFlags = 0,
+	    .usageFlags = usage_flags,
 	    .format = format,
 	    .sampleCount = sample_count,
 	    .width = w,
@@ -1488,7 +1504,6 @@ _create_swapchain(XrInstance instance,
 	    .faceCount = 1,
 	    .arraySize = 1,
 	    .mipCount = 1,
-	    .next = NULL,
 	};
 
 	XrResult result;
@@ -1505,8 +1520,8 @@ _create_swapchain(XrInstance instance,
 	if (!xr_check(instance, result, "Failed to enumerate swapchains"))
 		return false;
 
-	swapchain->images[num_swapchain] =
-	    malloc(sizeof(XrSwapchainImageOpenGLKHR) * swapchain->swapchain_lengths[num_swapchain]);
+	swapchain->images[num_swapchain] = static_cast<XrSwapchainImageOpenGLKHR*>(
+	    malloc(sizeof(XrSwapchainImageOpenGLKHR) * swapchain->swapchain_lengths[num_swapchain]));
 	for (uint32_t j = 0; j < swapchain->swapchain_lengths[num_swapchain]; j++) {
 		swapchain->images[num_swapchain][j].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
 		swapchain->images[num_swapchain][j].next = NULL;
@@ -1531,9 +1546,10 @@ create_one_swapchain(XrInstance instance,
                      uint32_t h,
                      XrSwapchainUsageFlags usage_flags)
 {
-	swapchain->swapchains = malloc(sizeof(XrSwapchain));
-	swapchain->swapchain_lengths = malloc(sizeof(uint32_t));
-	swapchain->images = malloc(sizeof(XrSwapchainImageOpenGLKHR*));
+	swapchain->swapchains = static_cast<XrSwapchain*>(malloc(sizeof(XrSwapchain)));
+	swapchain->swapchain_lengths = static_cast<uint32_t*>(malloc(sizeof(uint32_t)));
+	swapchain->images =
+	    static_cast<XrSwapchainImageOpenGLKHR**>(malloc(sizeof(XrSwapchainImageOpenGLKHR*)));
 	swapchain->swapchain_count = 1;
 
 	return _create_swapchain(instance, session, swapchain, 0, format, sample_count, w, h,
@@ -1549,9 +1565,10 @@ create_swapchain_from_views(XrInstance instance,
                             XrViewConfigurationView* viewconfig_views,
                             XrSwapchainUsageFlags usage_flags)
 {
-	swapchain->swapchains = malloc(sizeof(XrSwapchain) * view_count);
-	swapchain->swapchain_lengths = malloc(sizeof(uint32_t) * view_count);
-	swapchain->images = malloc(sizeof(XrSwapchainImageOpenGLKHR*) * view_count);
+	swapchain->swapchains = static_cast<XrSwapchain*>(malloc(sizeof(XrSwapchain) * view_count));
+	swapchain->swapchain_lengths = static_cast<uint32_t*>(malloc(sizeof(uint32_t) * view_count));
+	swapchain->images = static_cast<XrSwapchainImageOpenGLKHR**>(
+	    malloc(sizeof(XrSwapchainImageOpenGLKHR*) * view_count));
 	swapchain->swapchain_count = view_count;
 
 	for (uint32_t i = 0; i < view_count; i++) {
@@ -1583,7 +1600,8 @@ acquire_swapchain(XrInstance instance,
 	float timeout_ms = 100.0;
 	XrSwapchainImageWaitInfo wait_info = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
 	                                      .next = NULL,
-	                                      .timeout = (XrDuration)timeout_ms * 1000.f * 1000.f};
+	                                      .timeout =
+	                                          static_cast<XrDuration>(timeout_ms * 1000.0 * 1000.0)};
 	while ((result = xrWaitSwapchainImage(swapchain->swapchains[num_swapchain], &wait_info)) ==
 	       XR_TIMEOUT_EXPIRED) {
 		printf("xrWaitSwapchainImage timed out after %f ms\n", timeout_ms);
@@ -1613,10 +1631,15 @@ create_action(XrInstance instance,
               XrPath* subactions,
               XrAction* out_action)
 {
-	XrActionCreateInfo actionInfo = {.type = XR_TYPE_ACTION_CREATE_INFO,
-	                                 .actionType = type,
-	                                 .countSubactionPaths = subaction_count,
-	                                 .subactionPaths = subactions};
+	XrActionCreateInfo actionInfo = {
+	    .type = XR_TYPE_ACTION_CREATE_INFO,
+	    .next = nullptr,
+	    .actionName = "",
+	    .actionType = type,
+	    .countSubactionPaths = static_cast<uint32_t>(subaction_count),
+	    .subactionPaths = subactions,
+	    .localizedActionName = "",
+	};
 	strcpy(actionInfo.actionName, name);
 	strcpy(actionInfo.localizedActionName, localized_name);
 
@@ -1648,7 +1671,8 @@ suggest_actions(XrInstance instance, char* profile, struct Binding* b, int bindi
 		total += binding->path_count;
 	}
 
-	XrActionSuggestedBinding* bindings = malloc(sizeof(XrActionSuggestedBinding) * total);
+	auto* bindings =
+	    static_cast<XrActionSuggestedBinding*>(malloc(sizeof(XrActionSuggestedBinding) * total));
 
 	printf("Suggesting %d actions for %s\n", binding_count, profile);
 
@@ -1672,8 +1696,9 @@ suggest_actions(XrInstance instance, char* profile, struct Binding* b, int bindi
 
 	const XrInteractionProfileSuggestedBinding suggestedBindings = {
 	    .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
+	    .next = nullptr,
 	    .interactionProfile = interactionProfilePath,
-	    .countSuggestedBindings = total,
+	    .countSuggestedBindings = static_cast<uint32_t>(total),
 	    .suggestedBindings = bindings};
 
 	result = xrSuggestInteractionProfileBindings(instance, &suggestedBindings);
@@ -1694,10 +1719,10 @@ create_action_space(XrInstance instance,
 	// poses can't be queried directly, we need to create a space for each
 	for (int hand = 0; hand < HAND_COUNT; hand++) {
 		XrActionSpaceCreateInfo action_space_info = {.type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
-		                                             .next = NULL,
+		                                             .next = nullptr,
 		                                             .action = action->action,
-		                                             .poseInActionSpace = identity_pose,
-		                                             .subactionPath = hand_paths[hand]};
+		                                             .subactionPath = hand_paths[hand],
+		                                             .poseInActionSpace = identity_pose};
 
 		XrResult result;
 		result = xrCreateActionSpace(session, &action_space_info, &action->pose_spaces[hand]);
@@ -1785,8 +1810,7 @@ create_hand_trackers(XrInstance instance, XrSession session, struct hand_trackin
 	result = xrGetInstanceProcAddr(instance, "xrLocateHandJointsEXT",
 	                               (PFN_xrVoidFunction*)&hand_tracking->xrLocateHandJointsEXT);
 
-	XrHandEXT hands[HAND_COUNT] = {
-	    [HAND_LEFT_INDEX] = XR_HAND_LEFT_EXT, [HAND_RIGHT_INDEX] = XR_HAND_RIGHT_EXT};
+	XrHandEXT hands[HAND_COUNT] = {XR_HAND_LEFT_EXT, XR_HAND_RIGHT_EXT};
 
 	for (int i = 0; i < HAND_COUNT; i++) {
 		XrHandTrackerCreateInfoEXT hand_tracker_create_info = {
@@ -1800,8 +1824,10 @@ create_hand_trackers(XrInstance instance, XrSession session, struct hand_trackin
 			return false;
 		}
 
-		hand_tracking->joint_locations[i] = (XrHandJointLocationsEXT){
+		hand_tracking->joint_locations[i] = XrHandJointLocationsEXT{
 		    .type = XR_TYPE_HAND_JOINT_LOCATIONS_EXT,
+		    .next = nullptr,
+		    .isActive = false,
 		    .jointCount = XR_HAND_JOINT_COUNT_EXT,
 		    .jointLocations = hand_tracking->joints[i],
 		};
@@ -1903,39 +1929,42 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 			exit(0);
 
 		case 'b':
-			app->oxr.blend_mode = XrEnum_XrEnvironmentBlendMode(optarg);
+			app->oxr.blend_mode = static_cast<XrEnvironmentBlendMode>(XrEnum_XrEnvironmentBlendMode(optarg));
 			app->oxr.blend_mode_explicitly_set = true;
 			printf("ARG: Blend Mode %s -> %d\n", optarg, app->oxr.blend_mode);
 			break;
 
 		case 'f':
-			app->oxr.form_factor = XrEnum_XrFormFactor(optarg);
+			app->oxr.form_factor = static_cast<XrFormFactor>(XrEnum_XrFormFactor(optarg));
 			printf("ARG: Form Factor %s -> %d\n", optarg, app->oxr.form_factor);
 			break;
 
 		case 's':
-			app->oxr.play_space_type = XrEnum_XrReferenceSpaceType(optarg);
+			app->oxr.play_space_type = static_cast<XrReferenceSpaceType>(XrEnum_XrReferenceSpaceType(optarg));
 			printf("ARG: Reference Space %s -> %d\n", optarg, app->oxr.play_space_type);
 			break;
 
-		case 'c':
+		case 'c': {
 			app->cube.enabled = true;
-			app->cube.center_pos = (XrVector3f){.x = 0, .y = 0, .z = -1};
+			app->cube.center_pos = XrVector3f{.x = 0, .y = 0, .z = -1};
 			app->cube.current_pos = app->cube.center_pos;
-			app->cube.bouncing_lengths = (XrVector3f){.x = 0.75f, .y = 0.75f, .z = 0.75f};
+			app->cube.bouncing_lengths = XrVector3f{.x = 0.75f, .y = 0.75f, .z = 0.75f};
 
 			float velocity = 0.5;
 			if (strcmp(optarg, "horizontal") == 0) {
-				app->cube.velocity = (XrVector3f){.x = velocity, .y = 0, .z = 0};
+				app->cube.velocity = XrVector3f{.x = velocity, .y = 0, .z = 0};
 			} else if (strcmp(optarg, "diagonal") == 0) {
-				app->cube.velocity = (XrVector3f){.x = velocity * sqrt(2), .y = velocity * sqrt(2), .z = 0};
+				app->cube.velocity = XrVector3f{.x = static_cast<float>(velocity * sqrt(2)),
+				                                .y = static_cast<float>(velocity * sqrt(2)),
+				                                .z = 0};
 			} else if (strcmp(optarg, "vertical") == 0) {
-				app->cube.velocity = (XrVector3f){.x = 0, .y = velocity, .z = 0};
+				app->cube.velocity = XrVector3f{.x = 0, .y = velocity, .z = 0};
 			}
 			XrEnum_XrReferenceSpaceType(optarg);
 			printf("ARG: Enable moving cube %s -> %f, %f, %f\n", optarg, app->cube.velocity.x,
 			       app->cube.velocity.y, app->cube.velocity.z);
 			break;
+		}
 
 		case 'j':
 			printf("ARG: Enabling joint velocities\n");
@@ -1974,8 +2003,8 @@ parse_opts(int argc, char** argv, struct ApplicationState* app)
 int
 main(int argc, char** argv)
 {
-	struct ApplicationState* app = malloc(sizeof(struct ApplicationState));
-	*app = (struct ApplicationState){
+	auto* app = static_cast<ApplicationState*>(malloc(sizeof(ApplicationState)));
+	*app = ApplicationState{
 	    .oxr = {.form_factor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY,
 	            .view_type = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
 	            .play_space_type = XR_REFERENCE_SPACE_TYPE_STAGE,
@@ -1987,18 +2016,36 @@ main(int argc, char** argv)
 	            .play_space = XR_NULL_HANDLE,
 
 	            .view_count = 0,
-	            .viewconfig_views = NULL,
-	            .projection_views = NULL,
-	            .views = NULL},
+	            .viewconfig_views = nullptr,
+	            .projection_views = nullptr,
+	            .views = nullptr},
 	    .quad_layer = {.pixel_width = 320, .pixel_height = 240},
+	    .is_steamvr = false,
+	    .args =
+	        {
+	            .query_joint_velocities = false,
+	            .query_hand_velocities = false,
+	            .render_floor = false,
+	            .pose_test = false,
+	            .busy_loops = 0,
+	            .xdev_space = false,
+	        },
+	    .acquired_color = nullptr,
+	    .acquired_depth = nullptr,
+	    .cube =
+	        {
+	            .enabled = false,
+	            .center_pos = {0, 0, 0},
+	            .current_pos = {0, 0, 0},
+	            .pos_ts = 0,
+	            .velocity = {0, 0, 0},
+	            .bouncing_lengths = {0, 0, 0},
+	        },
 	    .gl_renderer =
 	        {
 	            .near_z = 0.01f,
 	            .far_z = 100.0f,
 	        },
-	    .args.query_joint_velocities = false,
-	    .args.query_hand_velocities = false,
-
 	};
 
 	parse_opts(argc, argv, app);
@@ -2007,17 +2054,20 @@ main(int argc, char** argv)
 
 	// each graphics API requires the use of a specialized struct.
 #ifdef _WIN32
-	XrGraphicsBindingOpenGLWin32KHR wgl_graphics_binding = (XrGraphicsBindingOpenGLWin32KHR){
+	XrGraphicsBindingOpenGLWin32KHR wgl_graphics_binding = {
 	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
+	    .next = nullptr,
 	};
 	gl_graphics_binding = &wgl_graphics_binding;
 #else
-	XrGraphicsBindingOpenGLXlibKHR glx_graphics_binding = (XrGraphicsBindingOpenGLXlibKHR){
+	XrGraphicsBindingOpenGLXlibKHR glx_graphics_binding = {
 	    .type = XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
+	    .next = nullptr,
 	};
 
-	XrGraphicsBindingEGLMNDX egl_graphics_binding = (XrGraphicsBindingEGLMNDX){
+	XrGraphicsBindingEGLMNDX egl_graphics_binding = {
 	    .type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
+	    .next = nullptr,
 	};
 
 	// default may be overwritten later once we detect we are not on glx
@@ -2056,21 +2106,20 @@ main(int argc, char** argv)
 
 	XrInstanceCreateInfo instance_create_info = {
 	    .type = XR_TYPE_INSTANCE_CREATE_INFO,
-	    .next = NULL,
+	    .next = nullptr,
 	    .createFlags = 0,
-	    .enabledExtensionCount = enabled_ext_count,
-	    .enabledExtensionNames = enabled_exts,
-	    .enabledApiLayerCount = 0,
-	    .enabledApiLayerNames = NULL,
 	    .applicationInfo =
 	        {
-	            // some compilers have trouble with char* initialization
 	            .applicationName = "",
-	            .engineName = "",
 	            .applicationVersion = 1,
+	            .engineName = "",
 	            .engineVersion = 0,
 	            .apiVersion = XR_MAKE_VERSION(1, 0, XR_VERSION_PATCH(XR_CURRENT_API_VERSION)),
 	        },
+	    .enabledApiLayerCount = 0,
+	    .enabledApiLayerNames = nullptr,
+	    .enabledExtensionCount = enabled_ext_count,
+	    .enabledExtensionNames = enabled_exts,
 	};
 	strncpy(instance_create_info.applicationInfo.applicationName, "OpenXR OpenGL Example",
 	        XR_MAX_APPLICATION_NAME_SIZE);
@@ -2109,7 +2158,10 @@ main(int argc, char** argv)
 
 	// --- Create XrSystem
 	XrSystemGetInfo system_get_info = {
-	    .type = XR_TYPE_SYSTEM_GET_INFO, .formFactor = app->oxr.form_factor, .next = NULL};
+	    .type = XR_TYPE_SYSTEM_GET_INFO,
+	    .next = nullptr,
+	    .formFactor = app->oxr.form_factor,
+	};
 
 	result = xrGetSystem(app->oxr.instance, &system_get_info, &app->oxr.system_id);
 	if (!xr_check(app->oxr.instance, result, "Failed to get system for HMD form factor."))
@@ -2177,7 +2229,8 @@ main(int argc, char** argv)
 	if (!xr_check(app->oxr.instance, result, "Failed to get view configuration view count!"))
 		return 1;
 
-	app->oxr.viewconfig_views = malloc(sizeof(XrViewConfigurationView) * app->oxr.view_count);
+	app->oxr.viewconfig_views = static_cast<XrViewConfigurationView*>(
+	    malloc(sizeof(XrViewConfigurationView) * app->oxr.view_count));
 	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
 		app->oxr.viewconfig_views[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
 		app->oxr.viewconfig_views[i].next = NULL;
@@ -2213,7 +2266,8 @@ main(int argc, char** argv)
 	if (!xr_check(app->oxr.instance, result, "failed to enumerate blend mode count!"))
 		return 1;
 
-	XrEnvironmentBlendMode* blend_modes = malloc(sizeof(XrEnvironmentBlendMode) * blend_mode_count);
+	XrEnvironmentBlendMode* blend_modes = static_cast<XrEnvironmentBlendMode*>(
+	    malloc(sizeof(XrEnvironmentBlendMode) * blend_mode_count));
 	result =
 	    xrEnumerateEnvironmentBlendModes(app->oxr.instance, app->oxr.system_id, app->oxr.view_type,
 	                                     blend_mode_count, &blend_mode_count, blend_modes);
@@ -2311,7 +2365,7 @@ main(int argc, char** argv)
 
 		if (!glx_graphics_binding.glxFBConfig) {
 			printf("Did not find GLXFBConfig that SDL used. Weird. Trying to continue with placeholder.");
-			glx_graphics_binding.glxFBConfig = (void*)0x1;
+			glx_graphics_binding.glxFBConfig = static_cast<GLXFBConfig>((void*)0x1);
 		}
 	}
 	if (eglGetCurrentContext() != NULL) {
@@ -2355,9 +2409,9 @@ main(int argc, char** argv)
 		return 1;
 
 
-	XrPosef y1 = {.position = {0, 1, 0}, .orientation = {0, 0, 0, 1}};
+	XrPosef y1 = {.orientation = {0, 0, 0, 1}, .position = {0, 1, 0}};
 
-	XrPosef z1 = {.position = {0, 0, -1}, .orientation = {0, 0, 0, 1}};
+	XrPosef z1 = {.orientation = {0, 0, 0, 1}, .position = {0, 0, -1}};
 
 	{
 		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
@@ -2433,7 +2487,8 @@ main(int argc, char** argv)
 		return 1;
 
 	printf("Runtime supports %d swapchain formats\n", swapchain_format_count);
-	int64_t* swapchain_formats = malloc(sizeof(int64_t) * swapchain_format_count);
+	int64_t* swapchain_formats =
+	    static_cast<int64_t*>(malloc(sizeof(int64_t) * swapchain_format_count));
 
 	result = xrEnumerateSwapchainFormats(app->oxr.session, swapchain_format_count,
 	                                     &swapchain_format_count, swapchain_formats);
@@ -2547,7 +2602,7 @@ main(int argc, char** argv)
 			return 1;
 
 		if (refresh_rate_count > 0) {
-			float* refresh_rates = malloc(sizeof(float) * refresh_rate_count);
+			float* refresh_rates = static_cast<float*>(malloc(sizeof(float) * refresh_rate_count));
 			result = refresh_rate_ext->xrEnumerateDisplayRefreshRatesFB(
 			    app->oxr.session, refresh_rate_count, &refresh_rate_count, refresh_rates);
 			if (!xr_check(app->oxr.instance, result, "failed to enumerate refresh rates")) {
@@ -3046,11 +3101,10 @@ main(int argc, char** argv)
 			if (app->grab_action.states[i].float_.isActive &&
 			    app->grab_action.states[i].float_.currentState > 0.75) {
 				XrHapticVibration vibration = {.type = XR_TYPE_HAPTIC_VIBRATION,
-				                               .next = NULL,
-				                               .amplitude = 0.5,
+				                               .next = nullptr,
 				                               .duration = XR_MIN_HAPTIC_DURATION,
-				                               .frequency = XR_FREQUENCY_UNSPECIFIED};
-
+				                               .frequency = XR_FREQUENCY_UNSPECIFIED,
+				                               .amplitude = 0.5};
 				XrHapticActionInfo haptic_action_info = {.type = XR_TYPE_HAPTIC_ACTION_INFO,
 				                                         .next = NULL,
 				                                         .action = app->haptic_action.action,
@@ -3089,8 +3143,9 @@ main(int argc, char** argv)
 			if (plane_detection_ext->state == XR_PLANE_DETECTION_STATE_DONE_EXT) {
 				XrPlaneDetectorGetInfoEXT get_info = {
 				    .type = XR_TYPE_PLANE_DETECTOR_GET_INFO_EXT,
-				    .time = app->oxr.frameState.predictedDisplayTime,
+				    .next = nullptr,
 				    .baseSpace = app->oxr.play_space,
+				    .time = app->oxr.frameState.predictedDisplayTime,
 				};
 
 				plane_detection_ext->locs.type = XR_TYPE_PLANE_DETECTOR_LOCATIONS_EXT;
@@ -3103,9 +3158,9 @@ main(int argc, char** argv)
 				if (!xr_check(app->oxr.instance, result, "failed to get plane detections 1"))
 					return 1;
 
-				XrPlaneDetectorLocationEXT* loc_arr =
+				XrPlaneDetectorLocationEXT* loc_arr = static_cast<XrPlaneDetectorLocationEXT*>(
 				    malloc(sizeof(XrPlaneDetectorLocationEXT) *
-				           plane_detection_ext->locs.planeLocationCountOutput);
+				           plane_detection_ext->locs.planeLocationCountOutput));
 				plane_detection_ext->locs.planeLocations = loc_arr;
 				plane_detection_ext->locs.planeLocationCapacityInput =
 				    plane_detection_ext->locs.planeLocationCountOutput;
@@ -3139,7 +3194,7 @@ main(int argc, char** argv)
 					}
 
 					if (data == NULL) {
-						data = malloc(sizeof(struct plane_data_t));
+						data = static_cast<plane_data_t*>(malloc(sizeof(struct plane_data_t)));
 						data->plane_id = loc->planeId;
 						data->polygon_count = 0;
 						data->polygons = NULL;
@@ -3151,7 +3206,8 @@ main(int argc, char** argv)
 					free(data->polygons);
 					data->polygon_count = 0;
 
-					data->polygons = malloc(sizeof(struct polygon_t) * loc->polygonBufferCount);
+					data->polygons =
+					    static_cast<polygon_t*>(malloc(sizeof(struct polygon_t) * loc->polygonBufferCount));
 					data->polygon_count = loc->polygonBufferCount;
 
 					for (uint32_t i_poly = 0; i_poly < loc->polygonBufferCount; i_poly++) {
@@ -3164,7 +3220,8 @@ main(int argc, char** argv)
 						if (!xr_check(app->oxr.instance, result, "failed to get plane detection polygon buf 1"))
 							return 1;
 
-						data->polygons[i_poly].vertices = malloc(sizeof(XrVector2f) * buf.vertexCountOutput);
+						data->polygons[i_poly].vertices =
+						    static_cast<XrVector2f*>(malloc(sizeof(XrVector2f) * buf.vertexCountOutput));
 						buf.vertices = data->polygons[i_poly].vertices;
 						buf.vertexCapacityInput = buf.vertexCountOutput;
 
@@ -3259,10 +3316,10 @@ main(int argc, char** argv)
 		                                            .next = NULL};
 
 		if (!app->acquired_color) {
-			app->acquired_color = malloc(app->oxr.view_count * sizeof(uint32_t));
+			app->acquired_color = static_cast<uint32_t*>(malloc(app->oxr.view_count * sizeof(uint32_t)));
 		}
 		if (!app->acquired_depth) {
-			app->acquired_depth = malloc(app->oxr.view_count * sizeof(uint32_t));
+			app->acquired_depth = static_cast<uint32_t*>(malloc(app->oxr.view_count * sizeof(uint32_t)));
 		}
 
 		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
@@ -3329,19 +3386,21 @@ main(int argc, char** argv)
 		float quad_width = 1.f;
 		XrCompositionLayerQuad quad_comp_layer = {
 		    .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-		    .next = NULL,
+		    .next = nullptr,
 		    .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
 		    .space = app->oxr.play_space,
 		    .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+		    .subImage = {.swapchain = app->quad_layer.swapchain.swapchains[0],
+		                 .imageRect =
+		                     {
+		                         .offset = {.x = 0, .y = 0},
+		                         .extent = {.width = app->quad_layer.pixel_width,
+		                                    .height = app->quad_layer.pixel_height},
+		                     }},
 		    .pose = {.orientation = {.x = 0.f, .y = 0.f, .z = 0.f, .w = 1.f},
 		             .position = {.x = 1.5f, .y = .7f, .z = -1.5f}},
 		    .size = {.width = quad_width, .height = quad_width / quad_aspect},
-		    .subImage = {.swapchain = app->quad_layer.swapchain.swapchains[0],
-		                 .imageRect = {
-		                     .offset = {.x = 0, .y = 0},
-		                     .extent = {.width = app->quad_layer.pixel_width,
-		                                .height = app->quad_layer.pixel_height},
-		                 }}};
+		};
 
 
 		int submitted_layer_count = 1;
@@ -3359,11 +3418,11 @@ main(int argc, char** argv)
 		}
 
 		XrFrameEndInfo frameEndInfo = {.type = XR_TYPE_FRAME_END_INFO,
+		                               .next = nullptr,
 		                               .displayTime = app->oxr.frameState.predictedDisplayTime,
-		                               .layerCount = submitted_layer_count,
-		                               .layers = submitted_layers,
 		                               .environmentBlendMode = app->oxr.blend_mode,
-		                               .next = NULL};
+		                               .layerCount = submitted_layer_count,
+		                               .layers = submitted_layers};
 		result = xrEndFrame(app->oxr.session, &frameEndInfo);
 		if (!xr_check(app->oxr.instance, result, "failed to end frame!"))
 			break;
@@ -3411,9 +3470,8 @@ main(int argc, char** argv)
 // OpenGL rendering code
 // =============================================================================
 
-// A small header with functions for OpenGL math
-#define MATH_3D_IMPLEMENTATION
-#include "external/math_3d/math_3d.h"
+// Header-only math library for rendering transforms.
+#include "external/HandmadeMath.h"
 
 static SDL_Window* desktop_window;
 static SDL_GLContext gl_context;
@@ -3511,9 +3569,10 @@ init_gl(uint32_t view_count, uint32_t* swapchain_lengths, struct gl_renderer_t* 
 	 * For this, we create one framebuffer per OpenGL texture.
 	 * This is not mandated by OpenXR, other ways to render to textures will work too.
 	 */
-	gl_renderer->framebuffers = malloc(sizeof(GLuint*) * view_count);
+	gl_renderer->framebuffers = static_cast<GLuint**>(malloc(sizeof(GLuint*) * view_count));
 	for (uint32_t i = 0; i < view_count; i++) {
-		gl_renderer->framebuffers[i] = malloc(sizeof(GLuint) * swapchain_lengths[i]);
+		gl_renderer->framebuffers[i] =
+		    static_cast<GLuint*>(malloc(sizeof(GLuint) * swapchain_lengths[i]));
 		glGenFramebuffers(swapchain_lengths[i], gl_renderer->framebuffers[i]);
 	}
 
@@ -3635,12 +3694,12 @@ render_cube(XrVector3f* position, XrQuaternionf* orientation, float cube_size, i
 }
 
 static void
-render_simple_cube(vec3_t position, vec3_t cube_size, int modelLoc)
+render_simple_cube(HMM_Vec3 position, HMM_Vec3 cube_size, int modelLoc)
 {
-	mat4_t modelmatrix =
-	    m4_mul(m4_translation(position), m4_scaling(vec3(cube_size.x, cube_size.y, cube_size.z)));
+	HMM_Mat4 modelmatrix =
+	    HMM_MulM4(HMM_Translate(position), HMM_Scale(HMM_V3(cube_size.X, cube_size.Y, cube_size.Z)));
 
-	glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)modelmatrix.m);
+	glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)modelmatrix.Elements);
 	glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
@@ -3660,13 +3719,13 @@ vec3_norm(XrVector3f* vec)
 	return r;
 }
 
-static mat4_t
-m4_dir_to_matrix(vec3_t dir)
+static HMM_Mat4
+m4_dir_to_matrix(HMM_Vec3 dir)
 {
-	vec3_t z_axis = vec3(0, 0, -1);
-	vec3_t rot_axis = v3_cross(z_axis, dir);
-	float angle = acos(v3_dot(z_axis, dir));
-	return m4_rotation(angle, rot_axis);
+	HMM_Vec3 z_axis = HMM_V3(0, 0, -1);
+	HMM_Vec3 rot_axis = HMM_Cross(z_axis, dir);
+	float angle = acos(HMM_DotV3(z_axis, dir));
+	return HMM_Rotate_RH(angle, rot_axis);
 }
 
 static void
@@ -3677,13 +3736,13 @@ render_vec(struct ApplicationState* app, XrVector3f* vec, XrVector3f* start)
 
 	XrVector3f lin_direction = vec3_norm(vec);
 
-	mat4_t m = m4_identity();
-	m = m4_mul(m, m4_translation(vec3(0, 0, -lin_len / 2.)));
-	m = m4_mul(m, m4_scaling(vec3(width, width, lin_len)));
-	m = m4_mul(m4_dir_to_matrix(vec3(lin_direction.x, lin_direction.y, lin_direction.z)), m);
-	m = m4_mul(m4_translation(vec3(start->x, start->y, start->z)), m);
+	HMM_Mat4 m = HMM_M4D(1.0f);
+	m = HMM_MulM4(m, HMM_Translate(HMM_V3(0, 0, -lin_len / 2.)));
+	m = HMM_MulM4(m, HMM_Scale(HMM_V3(width, width, lin_len)));
+	m = HMM_MulM4(m4_dir_to_matrix(HMM_V3(lin_direction.x, lin_direction.y, lin_direction.z)), m);
+	m = HMM_MulM4(HMM_Translate(HMM_V3(start->x, start->y, start->z)), m);
 
-	glUniformMatrix4fv(app->gl_renderer.modelLoc, 1, GL_FALSE, (float*)m.m);
+	glUniformMatrix4fv(app->gl_renderer.modelLoc, 1, GL_FALSE, (float*)m.Elements);
 	glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
@@ -3695,14 +3754,14 @@ render_line(struct ApplicationState* app, XrVector3f* v1, XrVector3f* v2)
 }
 
 void
-render_rotated_cube(vec3_t position, float cube_size, float rotation, int modelLoc)
+render_rotated_cube(HMM_Vec3 position, float cube_size, float rotation, int modelLoc)
 {
-	mat4_t rotationmatrix = m4_rotation_y(degrees_to_radians(rotation));
-	mat4_t modelmatrix = m4_mul(m4_translation(position),
-	                            m4_scaling(vec3(cube_size / 2., cube_size / 2., cube_size / 2.)));
-	modelmatrix = m4_mul(modelmatrix, rotationmatrix);
+	HMM_Mat4 rotationmatrix = HMM_Rotate_RH(degrees_to_radians(rotation), HMM_V3(0.0f, 1.0f, 0.0f));
+	HMM_Mat4 modelmatrix = HMM_MulM4(
+	    HMM_Translate(position), HMM_Scale(HMM_V3(cube_size / 2., cube_size / 2., cube_size / 2.)));
+	modelmatrix = HMM_MulM4(modelmatrix, rotationmatrix);
 
-	glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)modelmatrix.m);
+	glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)modelmatrix.Elements);
 	glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
@@ -3737,17 +3796,17 @@ visualize_velocity(XrPosef* base,
 		 * rotates in lin_direction. Used as model matrix for unit cube this renders
 		 * a block of length lin_len in lin_direction starting at the base pose.
 		 */
-		vec3_t from = vec3(base->position.x + lin_direction.x * block_radius / 2.,
-		                   base->position.y + lin_direction.y * block_radius / 2.,
-		                   base->position.z + lin_direction.z * block_radius / 2.);
-		vec3_t to = vec3(base->position.x + lin_direction.x, base->position.y + lin_direction.y,
-		                 base->position.z + lin_direction.z);
-		mat4_t look_at = m4_invert_affine(m4_look_at(from, to, vec3(0, 1, 0)));
+		HMM_Vec3 from = HMM_V3(base->position.x + lin_direction.x * block_radius / 2.,
+		                       base->position.y + lin_direction.y * block_radius / 2.,
+		                       base->position.z + lin_direction.z * block_radius / 2.);
+		HMM_Vec3 to = HMM_V3(base->position.x + lin_direction.x, base->position.y + lin_direction.y,
+		                     base->position.z + lin_direction.z);
+		HMM_Mat4 look_at = HMM_InvGeneralM4(HMM_LookAt_RH(from, to, HMM_V3(0, 1, 0)));
 
-		mat4_t scale = m4_scaling(vec3(cube_radius, cube_radius, block_radius));
-		look_at = m4_mul(look_at, scale);
+		HMM_Mat4 scale = HMM_Scale(HMM_V3(cube_radius, cube_radius, block_radius));
+		look_at = HMM_MulM4(look_at, scale);
 
-		glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)look_at.m);
+		glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)look_at.Elements);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
 	}
 #endif
@@ -3755,17 +3814,17 @@ visualize_velocity(XrPosef* base,
 // angular velocity - block is axis, length is velocity
 #if 0
 {
-vec3_t from = vec3(0, 0, 0);
-vec3_t to = vec3(angularVelocity->x / 2., angularVelocity->y / 2., angularVelocity->z / 2.0);
-mat4_t look_at = m4_invert_affine(m4_look_at(from, to, vec3(0, 1, 0)));
+HMM_Vec3 from = HMM_V3(0, 0, 0);
+HMM_Vec3 to = HMM_V3(angularVelocity->x / 2., angularVelocity->y / 2., angularVelocity->z / 2.0);
+HMM_Mat4 look_at = HMM_InvGeneralM4(HMM_LookAt_RH(from, to, HMM_V3(0, 1, 0)));
 
 float ang_len = vec3_mag(angularVelocity);
-mat4_t scale = m4_scaling(vec3(cube_radius, cube_radius, ang_len / 2.));
-look_at = m4_mul(look_at, scale);
+HMM_Mat4 scale = HMM_Scale(HMM_V3(cube_radius, cube_radius, ang_len / 2.));
+look_at = HMM_MulM4(look_at, scale);
 
-vec3_t pos = vec3(base->position.x, base->position.y, base->position.z);
-mat4_t model = m4_mul(m4_translation(pos), look_at);
-glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)model.m);
+HMM_Vec3 pos = HMM_V3(base->position.x, base->position.y, base->position.z);
+HMM_Mat4 model = HMM_MulM4(HMM_Translate(pos), look_at);
+glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (float*)model.Elements);
 glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 #endif
@@ -3860,7 +3919,7 @@ render_frame(struct ApplicationState* app,
 		if (app->args.render_floor) {
 			// render floor at y = 0
 			glUniform4f(gl_renderer->colorLoc, 0.25, 0.25, 0.25, 1.0);
-			render_simple_cube(vec3(0, 0, 0), vec3(1, 0.001, 1), gl_renderer->modelLoc);
+			render_simple_cube(HMM_V3(0, 0, 0), HMM_V3(1, 0.001, 1), gl_renderer->modelLoc);
 		}
 
 
@@ -3875,10 +3934,10 @@ render_frame(struct ApplicationState* app,
 
 			float dist = 1.5f;
 			float height = 0.5f;
-			render_rotated_cube(vec3(0, height, -dist), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(vec3(0, height, dist), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(vec3(dist, height, 0), .33f, angle, gl_renderer->modelLoc);
-			render_rotated_cube(vec3(-dist, height, 0), .33f, angle, gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(0, height, -dist), .33f, angle, gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(0, height, dist), .33f, angle, gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(dist, height, 0), .33f, angle, gl_renderer->modelLoc);
+			render_rotated_cube(HMM_V3(-dist, height, 0), .33f, angle, gl_renderer->modelLoc);
 		}
 
 		// render controllers / hand joints
@@ -3954,7 +4013,7 @@ render_frame(struct ApplicationState* app,
 				    .x = aim_zminus1.m[12], .y = aim_zminus1.m[13], .z = aim_zminus1.m[14]};
 				glUniform4f(gl_renderer->colorLoc, 1.0, 0.0, 0.0, 1.0);
 				render_line(app, &aim_pose->position, &aim_vec);
-				// render_simple_cube(vec3(aim_vec.x, aim_vec.y, aim_vec.z), vec3(0.1, 0.1, 0.1),
+				// render_simple_cube(HMM_V3(aim_vec.x, aim_vec.y, aim_vec.z), HMM_V3(0.1, 0.1, 0.1),
 				// app->gl_renderer.modelLoc);
 			} else if (hand_location_valid && !aim_location_valid) {
 				printf("Hand location %d valid but not aim location\n", hand);
@@ -4014,8 +4073,8 @@ render_frame(struct ApplicationState* app,
 
 				glUniform4f(app->gl_renderer.colorLoc, 1, 1, 1, 1.0);
 				render_simple_cube(
-				    vec3(app->cube.current_pos.x, app->cube.current_pos.y, app->cube.current_pos.z),
-				    vec3(0.1, 0.1, 0.1), app->gl_renderer.modelLoc);
+				    HMM_V3(app->cube.current_pos.x, app->cube.current_pos.y, app->cube.current_pos.z),
+				    HMM_V3(0.1, 0.1, 0.1), app->gl_renderer.modelLoc);
 			}
 		}
 
@@ -4053,7 +4112,7 @@ initialze_quad(struct gl_renderer_t* gl_renderer, struct quad_layer_t* quad)
 	glViewport(0, 0, w, h);
 	glScissor(0, 0, w, h);
 
-	uint8_t* rgb = malloc(sizeof(uint8_t) * w * h * 4);
+	uint8_t* rgb = static_cast<uint8_t*>(malloc(sizeof(uint8_t) * w * h * 4));
 	for (int row = 0; row < h; row++) {
 		for (int col = 0; col < w; col++) {
 			uint8_t* base = &rgb[(row * w * 4 + col * 4)];
