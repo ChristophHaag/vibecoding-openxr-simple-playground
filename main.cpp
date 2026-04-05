@@ -1023,13 +1023,14 @@ try_move(struct xdev_space_element** old_list,
 				printf("Keeping xdev %s [%s] alive", prop->name, prop->serial);
 				if (prev == NULL) {
 					*old_list = current->next;
-					removed_element = current;
 				} else {
 					prev->next = current->next;
-					removed_element = current;
-					break;
 				}
+				removed_element = current;
+				break;
 			}
+			prev = current;
+			current = current->next;
 		}
 	}
 
@@ -3240,11 +3241,12 @@ main(int argc, char** argv)
 				// delete old list of planes that should now have only planes not detected anymore
 				struct plane_data_t* l = plane_detection_ext->plane_data_list;
 				while (l != NULL) {
-					l = l->next;
 					struct plane_data_t* tmp = l;
+					l = l->next;
 					for (uint32_t i_poly = 0; i_poly < tmp->polygon_count; i_poly++) {
 						free(tmp->polygons[i_poly].vertices);
 					}
+					free(tmp->polygons);
 					free(tmp);
 				}
 				plane_detection_ext->plane_data_list = new_list;
