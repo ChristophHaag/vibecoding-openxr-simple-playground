@@ -1425,6 +1425,10 @@ struct ApplicationState
 	XrSpace ref_view_space;
 	XrSpace ref_view_space_z1;
 
+	// Input: hand paths and action set, created during setup_actions().
+	XrPath hand_paths[HAND_COUNT];
+	XrActionSet gameplay_actionset;
+
 	struct gl_renderer_t gl_renderer;
 };
 
@@ -1932,6 +1936,367 @@ get_hand_tracking(XrInstance instance,
 	return true;
 }
 
+// Create the six auxiliary reference spaces (LOCAL ±y1, STAGE ±y1, VIEW ±z1).
+// The main play space is created separately before calling this.
+static bool
+create_reference_spaces(struct ApplicationState* app)
+{
+	XrResult result;
+
+	XrPosef y1 = {.orientation = {0, 0, 0, 1}, .position = {0, 1, 0}};
+	XrPosef z1 = {.orientation = {0, 0, 0, 1}, .position = {0, 0, -1}};
+
+	XrReferenceSpaceCreateInfo ci = {
+	    .type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO, .next = NULL, .poseInReferenceSpace = {}};
+
+	ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+	ci.poseInReferenceSpace = identity_pose;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_local_space);
+	if (!xr_check(app->oxr.instance, result, "Failed to create LOCAL reference space"))
+		return false;
+
+	ci.poseInReferenceSpace = y1;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_local_space_y1);
+	if (!xr_check(app->oxr.instance, result, "Failed to create LOCAL+y1 reference space"))
+		return false;
+
+	ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+	ci.poseInReferenceSpace = identity_pose;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_stage_space);
+	if (!xr_check(app->oxr.instance, result, "Failed to create STAGE reference space"))
+		return false;
+
+	ci.poseInReferenceSpace = y1;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_stage_space_y1);
+	if (!xr_check(app->oxr.instance, result, "Failed to create STAGE+y1 reference space"))
+		return false;
+
+	ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+	ci.poseInReferenceSpace = identity_pose;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_view_space);
+	if (!xr_check(app->oxr.instance, result, "Failed to create VIEW reference space"))
+		return false;
+
+	ci.poseInReferenceSpace = z1;
+	result = xrCreateReferenceSpace(app->oxr.session, &ci, &app->ref_view_space_z1);
+	if (!xr_check(app->oxr.instance, result, "Failed to create VIEW+z1 reference space"))
+		return false;
+
+	return true;
+}
+
+// Select swapchain formats, create color + depth + quad swapchains, allocate per-view
+// projection/view arrays, and fill depth infos if the depth extension is active.
+static bool
+create_vr_swapchains(struct ApplicationState* app)
+{
+	// SRGB is usually a better choice than linear
+	int64_t color_format =
+	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_SRGB8_ALPHA8_EXT, true);
+
+	int64_t quad_format =
+	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_RGBA8_EXT, true);
+
+	int64_t depth_format =
+	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_DEPTH_COMPONENT16, true);
+	if (depth_format < 0) {
+		printf("Preferred depth format GL_DEPTH_COMPONENT16 not supported, disabling depth\n");
+		struct depth_t* d =
+		    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+		if (d)
+			d->base.supported = false;
+	}
+
+	XrSwapchainUsageFlags color_flags =
+	    XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+	if (!create_swapchain_from_views(app->oxr.instance, app->oxr.session,
+	                                 &app->vr_swapchains[SWAPCHAIN_PROJECTION], app->oxr.view_count,
+	                                 color_format, app->oxr.viewconfig_views, color_flags))
+		return false;
+
+	struct depth_t* depth_ext =
+	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+	if (depth_ext->base.supported) {
+		XrSwapchainUsageFlags depth_flags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		if (!create_swapchain_from_views(app->oxr.instance, app->oxr.session,
+		                                 &app->vr_swapchains[SWAPCHAIN_DEPTH], app->oxr.view_count,
+		                                 depth_format, app->oxr.viewconfig_views, depth_flags))
+			return false;
+	}
+
+	if (!create_one_swapchain(app->oxr.instance, app->oxr.session, &app->quad_layer.swapchain,
+	                          quad_format, 1, app->quad_layer.pixel_width,
+	                          app->quad_layer.pixel_height, color_flags))
+		return false;
+
+	// Pre-allocate view/projection arrays — reused every frame to avoid per-frame allocs.
+	app->oxr.views = (XrView*)malloc(sizeof(XrView) * app->oxr.view_count);
+	app->oxr.projection_views = (XrCompositionLayerProjectionView*)malloc(
+	    sizeof(XrCompositionLayerProjectionView) * app->oxr.view_count);
+	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
+		app->oxr.views[i].type = XR_TYPE_VIEW;
+		app->oxr.views[i].next = NULL;
+
+		app->oxr.projection_views[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+		app->oxr.projection_views[i].next = NULL;
+
+		app->oxr.projection_views[i].subImage.swapchain =
+		    app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchains[i];
+		app->oxr.projection_views[i].subImage.imageArrayIndex = 0;
+		app->oxr.projection_views[i].subImage.imageRect.offset.x = 0;
+		app->oxr.projection_views[i].subImage.imageRect.offset.y = 0;
+		app->oxr.projection_views[i].subImage.imageRect.extent.width =
+		    app->oxr.viewconfig_views[i].recommendedImageRectWidth;
+		app->oxr.projection_views[i].subImage.imageRect.extent.height =
+		    app->oxr.viewconfig_views[i].recommendedImageRectHeight;
+	}
+
+	if (depth_ext->base.supported) {
+		depth_ext->infos = (XrCompositionLayerDepthInfoKHR*)malloc(
+		    sizeof(XrCompositionLayerDepthInfoKHR) * app->oxr.view_count);
+		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
+			depth_ext->infos[i].type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR;
+			depth_ext->infos[i].next = NULL;
+			depth_ext->infos[i].minDepth = 0.f;
+			depth_ext->infos[i].maxDepth = 1.f;
+			depth_ext->infos[i].nearZ = app->gl_renderer.near_z;
+			depth_ext->infos[i].farZ = app->gl_renderer.far_z;
+
+			depth_ext->infos[i].subImage.swapchain = app->vr_swapchains[SWAPCHAIN_DEPTH].swapchains[i];
+			depth_ext->infos[i].subImage.imageArrayIndex = 0;
+			depth_ext->infos[i].subImage.imageRect.offset.x = 0;
+			depth_ext->infos[i].subImage.imageRect.offset.y = 0;
+			depth_ext->infos[i].subImage.imageRect.extent.width =
+			    app->oxr.viewconfig_views[i].recommendedImageRectWidth;
+			depth_ext->infos[i].subImage.imageRect.extent.height =
+			    app->oxr.viewconfig_views[i].recommendedImageRectHeight;
+
+			app->oxr.projection_views[i].next = &depth_ext->infos[i];
+		}
+	}
+
+	return true;
+}
+
+// Create the action set, all actions, suggest bindings for every controller profile,
+// create action spaces, create hand trackers, and create the plane detector.
+// Stores app->hand_paths and app->gameplay_actionset.
+static bool
+setup_actions(struct ApplicationState* app)
+{
+	XrResult result;
+
+	xrStringToPath(app->oxr.instance, "/user/hand/left", &app->hand_paths[HAND_LEFT_INDEX]);
+	xrStringToPath(app->oxr.instance, "/user/hand/right", &app->hand_paths[HAND_RIGHT_INDEX]);
+
+	XrActionSetCreateInfo gameplay_actionset_info = {
+	    .type = XR_TYPE_ACTION_SET_CREATE_INFO, .next = NULL, .priority = 0};
+	strcpy(gameplay_actionset_info.actionSetName, "gameplay_actionset");
+	strcpy(gameplay_actionset_info.localizedActionSetName, "Gameplay Actions");
+
+	result = xrCreateActionSet(app->oxr.instance, &gameplay_actionset_info, &app->gameplay_actionset);
+	if (!xr_check(app->oxr.instance, result, "failed to create actionset"))
+		return false;
+
+	// --- Actions
+
+	// Grabbing objects is not actually implemented in this demo, it only gives some haptic feedback.
+	app->grab_action =
+	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_FLOAT_INPUT};
+	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_FLOAT_INPUT, "grabobjectfloat",
+	                   "Grab Object", app->gameplay_actionset, HAND_COUNT, app->hand_paths,
+	                   &app->grab_action.action))
+		return false;
+
+	// A 1D action that is fed by one axis of a 2D input (y axis of thumbstick).
+	app->accelerate_action =
+	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_FLOAT_INPUT};
+	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_FLOAT_INPUT, "accelerate", "Accelerate",
+	                   app->gameplay_actionset, HAND_COUNT, app->hand_paths,
+	                   &app->accelerate_action.action))
+		return false;
+
+	app->hand_pose_action =
+	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_POSE_INPUT};
+	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_POSE_INPUT, "handpose", "Hand Pose",
+	                   app->gameplay_actionset, HAND_COUNT, app->hand_paths,
+	                   &app->hand_pose_action.action))
+		return false;
+	if (!create_action_space(app->oxr.instance, app->oxr.session, &app->hand_pose_action,
+	                         app->hand_paths))
+		return false;
+
+	app->aim_action =
+	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_POSE_INPUT};
+	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_POSE_INPUT, "aim", "Aim Pose",
+	                   app->gameplay_actionset, HAND_COUNT, app->hand_paths, &app->aim_action.action))
+		return false;
+	if (!create_action_space(app->oxr.instance, app->oxr.session, &app->aim_action, app->hand_paths))
+		return false;
+
+	app->haptic_action =
+	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_VIBRATION_OUTPUT};
+	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic",
+	                   "Haptic Vibration", app->gameplay_actionset, HAND_COUNT, app->hand_paths,
+	                   &app->haptic_action.action))
+		return false;
+
+	// --- Interaction profile bindings
+
+	struct Binding simple_bindings[] = {
+	    {.action = app->grab_action.action,
+	     .paths = {"/user/hand/left/input/select/click", "/user/hand/right/input/select/click"},
+	     .path_count = 2},
+	    {.action = app->hand_pose_action.action,
+	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
+	     .path_count = 2},
+	    {.action = app->aim_action.action,
+	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
+	     .path_count = 2},
+	    {.action = app->haptic_action.action,
+	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
+	     .path_count = 2},
+	};
+	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/khr/simple_controller",
+	                     simple_bindings, ARRAY_SIZE(simple_bindings)))
+		return false;
+
+	struct Binding touch_bindings[] = {
+	    {.action = app->grab_action.action,
+	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
+	     .path_count = 2},
+	    {.action = app->accelerate_action.action,
+	     .paths = {"/user/hand/left/input/thumbstick/y", "/user/hand/right/input/thumbstick/y"},
+	     .path_count = 2},
+	    {.action = app->hand_pose_action.action,
+	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
+	     .path_count = 2},
+	    {.action = app->haptic_action.action,
+	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
+	     .path_count = 2},
+	};
+	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/oculus/touch_controller",
+	                     touch_bindings, ARRAY_SIZE(touch_bindings)))
+		return false;
+
+	struct Binding index_bindings[] = {
+	    {.action = app->grab_action.action,
+	     .paths = {"/user/hand/left/input/trigger", "/user/hand/right/input/trigger"},
+	     .path_count = 2},
+	    {.action = app->accelerate_action.action,
+	     .paths = {"/user/hand/left/input/thumbstick/y", "/user/hand/right/input/thumbstick/y"},
+	     .path_count = 2},
+	    {.action = app->hand_pose_action.action,
+	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
+	     .path_count = 2},
+	    {.action = app->aim_action.action,
+	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
+	     .path_count = 2},
+	    {.action = app->haptic_action.action,
+	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
+	     .path_count = 2},
+	};
+	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/valve/index_controller",
+	                     index_bindings, ARRAY_SIZE(index_bindings)))
+		return false;
+
+	struct Binding vive_bindings[] = {
+	    {.action = app->grab_action.action,
+	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
+	     .path_count = 2},
+	    {.action = app->hand_pose_action.action,
+	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
+	     .path_count = 2},
+	    {.action = app->aim_action.action,
+	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
+	     .path_count = 2},
+	    {.action = app->haptic_action.action,
+	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
+	     .path_count = 2},
+	};
+	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/htc/vive_controller",
+	                     vive_bindings, ARRAY_SIZE(vive_bindings)))
+		return false;
+
+	struct hand_interaction_t* hand_interaction_ext =
+	    (struct hand_interaction_t*)get_ext(app, XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
+	if (hand_interaction_ext && hand_interaction_ext->base.supported) {
+		struct Binding hi_bindings[] = {
+		    {.action = app->grab_action.action,
+		     .paths = {"/user/hand/left/input/pinch_ext/value",
+		               "/user/hand/right/input/pinch_ext/value"},
+		     .path_count = 2},
+		    {.action = app->hand_pose_action.action,
+		     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
+		     .path_count = 2},
+		    {.action = app->aim_action.action,
+		     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
+		     .path_count = 2},
+		};
+		if (!suggest_actions(app->oxr.instance, "/interaction_profiles/ext/hand_interaction_ext",
+		                     hi_bindings, ARRAY_SIZE(hi_bindings)))
+			return false;
+	}
+
+	// --- Per-session extension setup that depends on having actions ready
+
+	struct hand_tracking_t* hand_tracking_ext =
+	    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+	if (hand_tracking_ext->system_supported) {
+		if (!create_hand_trackers(app->oxr.instance, app->oxr.session, hand_tracking_ext))
+			return false;
+	}
+
+	struct plane_detection_t* plane_detection_ext =
+	    (struct plane_detection_t*)get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME);
+	if (plane_detection_ext->base.supported) {
+		XrPlaneDetectorCreateInfoEXT create_info = {
+		    .type = XR_TYPE_PLANE_DETECTOR_CREATE_INFO_EXT,
+		    .flags = XR_PLANE_DETECTOR_ENABLE_CONTOUR_BIT_EXT,
+		};
+		result = plane_detection_ext->xrCreatePlaneDetectorEXT(app->oxr.session, &create_info,
+		                                                       &plane_detection_ext->pd);
+		if (!xr_check(app->oxr.instance, result, "failed to create plane detector set"))
+			return false;
+	}
+
+	return true;
+}
+
+// Free all resources and destroy the XR instance.  Called after the render loop exits.
+static void
+cleanup_app(struct ApplicationState* app)
+{
+	struct depth_t* depth_ext =
+	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
+
+	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
+		free(app->vr_swapchains[SWAPCHAIN_PROJECTION].images[i]);
+		if (depth_ext->base.supported)
+			free(app->vr_swapchains[SWAPCHAIN_DEPTH].images[i]);
+
+		glDeleteFramebuffers(app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchain_lengths[i],
+		                     app->gl_renderer.framebuffers[i]);
+		free(app->gl_renderer.framebuffers[i]);
+	}
+	xrDestroyInstance(app->oxr.instance);
+
+	free(app->oxr.viewconfig_views);
+	free(app->oxr.projection_views);
+	free(app->oxr.views);
+
+	destroy_swapchain(&app->vr_swapchains[SWAPCHAIN_PROJECTION]);
+	destroy_swapchain(&app->vr_swapchains[SWAPCHAIN_DEPTH]);
+	free(app->gl_renderer.framebuffers);
+
+	free(app->acquired_color);
+	free(app->acquired_depth);
+
+	free(depth_ext->infos);
+
+	free(app);
+}
+
 static struct option long_options[] = {{"help", no_argument, 0, 'h'},
                                        {"velocities", no_argument, 0, 'v'},
                                        {"jointvelocities", no_argument, 0, 'j'},
@@ -2140,8 +2505,6 @@ main(int argc, char** argv)
 	// default may be overwritten later once we detect we are not on glx
 	gl_graphics_binding = &glx_graphics_binding;
 #endif
-
-	XrPath hand_paths[HAND_COUNT];
 
 	XrResult result = XR_SUCCESS;
 
@@ -2475,188 +2838,14 @@ main(int argc, char** argv)
 	if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
 		return 1;
 
-
-	XrPosef y1 = {.orientation = {0, 0, 0, 1}, .position = {0, 1, 0}};
-
-	XrPosef z1 = {.orientation = {0, 0, 0, 1}, .position = {0, 0, -1}};
-
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_LOCAL,
-		                                                .poseInReferenceSpace = identity_pose};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_local_space);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_LOCAL,
-		                                                .poseInReferenceSpace = y1};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_local_space_y1);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_STAGE,
-		                                                .poseInReferenceSpace = identity_pose};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_stage_space);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_STAGE,
-		                                                .poseInReferenceSpace = y1};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_stage_space_y1);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_VIEW,
-		                                                .poseInReferenceSpace = identity_pose};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_view_space);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-	{
-		XrReferenceSpaceCreateInfo space_create_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
-		                                                .next = NULL,
-		                                                .referenceSpaceType =
-		                                                    XR_REFERENCE_SPACE_TYPE_VIEW,
-		                                                .poseInReferenceSpace = z1};
-
-		result = xrCreateReferenceSpace(app->oxr.session, &space_create_info, &app->ref_view_space_z1);
-		if (!xr_check(app->oxr.instance, result, "Failed to create play space!"))
-			return 1;
-	}
-
-	// --- Create Swapchains
-	uint32_t swapchain_format_count;
-	result = xrEnumerateSwapchainFormats(app->oxr.session, 0, &swapchain_format_count, NULL);
-	if (!xr_check(app->oxr.instance, result, "Failed to get number of supported swapchain formats"))
+	if (!create_reference_spaces(app))
 		return 1;
 
-	printf("Runtime supports %d swapchain formats\n", swapchain_format_count);
-	int64_t* swapchain_formats =
-	    static_cast<int64_t*>(malloc(sizeof(int64_t) * swapchain_format_count));
-
-	result = xrEnumerateSwapchainFormats(app->oxr.session, swapchain_format_count,
-	                                     &swapchain_format_count, swapchain_formats);
-
-	free(swapchain_formats);
-	if (!xr_check(app->oxr.instance, result, "Failed to enumerate swapchain formats"))
-		return 1;
-
-	// SRGB is usually a better choice than linear
-	// a more sophisticated approach would iterate supported swapchain formats and choose from them
-	int64_t color_format =
-	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_SRGB8_ALPHA8_EXT, true);
-
-	int64_t quad_format =
-	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_RGBA8_EXT, true);
-
-	int64_t depth_format =
-	    get_swapchain_format(app->oxr.instance, app->oxr.session, GL_DEPTH_COMPONENT16, true);
-	if (depth_format < 0) {
-		printf("Preferred depth format GL_DEPTH_COMPONENT16 not supported, disabling depth\n");
-		struct depth_t* depth_ext =
-		    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
-		if (depth_ext) {
-			depth_ext->base.supported = false;
-		}
-	}
-
-	XrSwapchainUsageFlags color_flags =
-	    XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-	if (!create_swapchain_from_views(app->oxr.instance, app->oxr.session,
-	                                 &app->vr_swapchains[SWAPCHAIN_PROJECTION], app->oxr.view_count,
-	                                 color_format, app->oxr.viewconfig_views, color_flags))
+	if (!create_vr_swapchains(app))
 		return 1;
 
 	struct depth_t* depth_ext =
 	    (struct depth_t*)get_ext(app, XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
-	if (depth_ext->base.supported) {
-		XrSwapchainUsageFlags depth_flags = XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-		if (!create_swapchain_from_views(app->oxr.instance, app->oxr.session,
-		                                 &app->vr_swapchains[SWAPCHAIN_DEPTH], app->oxr.view_count,
-		                                 depth_format, app->oxr.viewconfig_views, depth_flags)) {
-			return 1;
-		}
-	}
-
-	if (!create_one_swapchain(app->oxr.instance, app->oxr.session, &app->quad_layer.swapchain,
-	                          quad_format, 1, app->quad_layer.pixel_width,
-	                          app->quad_layer.pixel_height, color_flags))
-		return 1;
-
-	// Do not allocate these every frame to save some resources
-	app->oxr.views = (XrView*)malloc(sizeof(XrView) * app->oxr.view_count);
-	app->oxr.projection_views = (XrCompositionLayerProjectionView*)malloc(
-	    sizeof(XrCompositionLayerProjectionView) * app->oxr.view_count);
-	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
-		app->oxr.views[i].type = XR_TYPE_VIEW;
-		app->oxr.views[i].next = NULL;
-
-		app->oxr.projection_views[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
-		app->oxr.projection_views[i].next = NULL;
-
-		app->oxr.projection_views[i].subImage.swapchain =
-		    app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchains[i];
-		app->oxr.projection_views[i].subImage.imageArrayIndex = 0;
-		app->oxr.projection_views[i].subImage.imageRect.offset.x = 0;
-		app->oxr.projection_views[i].subImage.imageRect.offset.y = 0;
-		app->oxr.projection_views[i].subImage.imageRect.extent.width =
-		    app->oxr.viewconfig_views[i].recommendedImageRectWidth;
-		app->oxr.projection_views[i].subImage.imageRect.extent.height =
-		    app->oxr.viewconfig_views[i].recommendedImageRectHeight;
-
-		// projection_views[i].{pose, fov} have to be filled every frame in frame loop
-	};
-
-
-	if (depth_ext->base.supported) {
-		depth_ext->infos = (XrCompositionLayerDepthInfoKHR*)malloc(
-		    sizeof(XrCompositionLayerDepthInfoKHR) * app->oxr.view_count);
-		for (uint32_t i = 0; i < app->oxr.view_count; i++) {
-			depth_ext->infos[i].type = XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR;
-			depth_ext->infos[i].next = NULL;
-			depth_ext->infos[i].minDepth = 0.f;
-			depth_ext->infos[i].maxDepth = 1.f;
-			depth_ext->infos[i].nearZ = app->gl_renderer.near_z;
-			depth_ext->infos[i].farZ = app->gl_renderer.far_z;
-
-			depth_ext->infos[i].subImage.swapchain = app->vr_swapchains[SWAPCHAIN_DEPTH].swapchains[i];
-
-			depth_ext->infos[i].subImage.imageArrayIndex = 0;
-			depth_ext->infos[i].subImage.imageRect.offset.x = 0;
-			depth_ext->infos[i].subImage.imageRect.offset.y = 0;
-			depth_ext->infos[i].subImage.imageRect.extent.width =
-			    app->oxr.viewconfig_views[i].recommendedImageRectWidth;
-			depth_ext->infos[i].subImage.imageRect.extent.height =
-			    app->oxr.viewconfig_views[i].recommendedImageRectHeight;
-
-			app->oxr.projection_views[i].next = &depth_ext->infos[i];
-		};
-	}
-
-
 
 	struct refresh_rate_t* refresh_rate_ext =
 	    (struct refresh_rate_t*)get_ext(app, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
@@ -2702,178 +2891,9 @@ main(int argc, char** argv)
 	}
 
 
-	// --- Set up input (actions)
-
-	xrStringToPath(app->oxr.instance, "/user/hand/left", &hand_paths[HAND_LEFT_INDEX]);
-	xrStringToPath(app->oxr.instance, "/user/hand/right", &hand_paths[HAND_RIGHT_INDEX]);
-
-	XrActionSetCreateInfo gameplay_actionset_info = {
-	    .type = XR_TYPE_ACTION_SET_CREATE_INFO, .next = NULL, .priority = 0};
-	strcpy(gameplay_actionset_info.actionSetName, "gameplay_actionset");
-	strcpy(gameplay_actionset_info.localizedActionSetName, "Gameplay Actions");
-
-	XrActionSet gameplay_actionset;
-	result = xrCreateActionSet(app->oxr.instance, &gameplay_actionset_info, &gameplay_actionset);
-	if (!xr_check(app->oxr.instance, result, "failed to create actionset"))
+	// --- Set up input (actions), hand trackers, and plane detector
+	if (!setup_actions(app))
 		return 1;
-
-
-	// Grabbing objects is not actually implemented in this demo, it only gives some  haptic feebdack.
-	app->grab_action =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_FLOAT_INPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_FLOAT_INPUT, "grabobjectfloat",
-	                   "Grab Object", gameplay_actionset, HAND_COUNT, hand_paths,
-	                   &app->grab_action.action))
-		return 1;
-
-	// A 1D action that is fed by one axis of a 2D input (y axis of thumbstick).
-	app->accelerate_action =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_FLOAT_INPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_FLOAT_INPUT, "accelerate", "Accelerate",
-	                   gameplay_actionset, HAND_COUNT, hand_paths, &app->accelerate_action.action))
-		return 1;
-
-	app->hand_pose_action =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_POSE_INPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_POSE_INPUT, "handpose", "Hand Pose",
-	                   gameplay_actionset, HAND_COUNT, hand_paths, &app->hand_pose_action.action))
-		return 1;
-	if (!create_action_space(app->oxr.instance, app->oxr.session, &app->hand_pose_action, hand_paths))
-		return 1;
-
-	app->aim_action =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_POSE_INPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_POSE_INPUT, "aim", "Aim Pose",
-	                   gameplay_actionset, HAND_COUNT, hand_paths, &app->aim_action.action))
-		return 1;
-	if (!create_action_space(app->oxr.instance, app->oxr.session, &app->aim_action, hand_paths))
-		return 1;
-
-	app->haptic_action =
-	    (struct action_t){.action = XR_NULL_HANDLE, .action_type = XR_ACTION_TYPE_VIBRATION_OUTPUT};
-	if (!create_action(app->oxr.instance, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic",
-	                   "Haptic Vibration", gameplay_actionset, HAND_COUNT, hand_paths,
-	                   &app->haptic_action.action))
-		return 1;
-
-
-	struct Binding simple_bindings[] = {
-	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/select/click", "/user/hand/right/input/select/click"},
-	     .path_count = 2},
-	    {.action = app->hand_pose_action.action,
-	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
-	     .path_count = 2},
-	    {.action = app->aim_action.action,
-	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
-	     .path_count = 2},
-	    {.action = app->haptic_action.action,
-	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
-	     .path_count = 2},
-	};
-	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/khr/simple_controller",
-	                     simple_bindings, ARRAY_SIZE(simple_bindings)))
-		return 1;
-
-
-	struct Binding touch_bindings[] = {
-	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
-	     .path_count = 2},
-	    {.action = app->accelerate_action.action,
-	     .paths = {"/user/hand/left/input/thumbstick/y", "/user/hand/right/input/thumbstick/y"},
-	     .path_count = 2},
-	    {.action = app->hand_pose_action.action,
-	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
-	     .path_count = 2},
-	    {.action = app->haptic_action.action,
-	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
-	     .path_count = 2},
-	};
-	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/oculus/touch_controller",
-	                     touch_bindings, ARRAY_SIZE(touch_bindings)))
-		return 1;
-
-	struct Binding index_bindings[] = {
-	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/trigger", "/user/hand/right/input/trigger"},
-	     .path_count = 2},
-	    {.action = app->accelerate_action.action,
-	     .paths = {"/user/hand/left/input/thumbstick/y", "/user/hand/right/input/thumbstick/y"},
-	     .path_count = 2},
-	    {.action = app->hand_pose_action.action,
-	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
-	     .path_count = 2},
-	    {.action = app->aim_action.action,
-	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
-	     .path_count = 2},
-	    {.action = app->haptic_action.action,
-	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
-	     .path_count = 2},
-	};
-	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/valve/index_controller",
-	                     index_bindings, ARRAY_SIZE(index_bindings)))
-		return 1;
-
-
-	struct Binding vive_bindings[] = {
-	    {.action = app->grab_action.action,
-	     .paths = {"/user/hand/left/input/trigger/value", "/user/hand/right/input/trigger/value"},
-	     .path_count = 2},
-	    {.action = app->hand_pose_action.action,
-	     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
-	     .path_count = 2},
-	    {.action = app->aim_action.action,
-	     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
-	     .path_count = 2},
-	    {.action = app->haptic_action.action,
-	     .paths = {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"},
-	     .path_count = 2},
-	};
-	if (!suggest_actions(app->oxr.instance, "/interaction_profiles/htc/vive_controller",
-	                     vive_bindings, ARRAY_SIZE(vive_bindings)))
-		return 1;
-
-	struct hand_interaction_t* hand_interaction_ext =
-	    (struct hand_interaction_t*)get_ext(app, XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
-	if (hand_interaction_ext && hand_interaction_ext->base.supported) {
-		struct Binding hi_bindings[] = {
-		    {.action = app->grab_action.action,
-		     .paths = {"/user/hand/left/input/pinch_ext/value",
-		               "/user/hand/right/input/pinch_ext/value"},
-		     .path_count = 2},
-		    {.action = app->hand_pose_action.action,
-		     .paths = {"/user/hand/left/input/grip/pose", "/user/hand/right/input/grip/pose"},
-		     .path_count = 2},
-		    {.action = app->aim_action.action,
-		     .paths = {"/user/hand/left/input/aim/pose", "/user/hand/right/input/aim/pose"},
-		     .path_count = 2},
-		};
-		if (!suggest_actions(app->oxr.instance, "/interaction_profiles/ext/hand_interaction_ext",
-		                     hi_bindings, ARRAY_SIZE(hi_bindings)))
-			return 1;
-	}
-
-	struct hand_tracking_t* hand_tracking_ext =
-	    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
-	if (hand_tracking_ext->system_supported) {
-		if (!create_hand_trackers(app->oxr.instance, app->oxr.session, hand_tracking_ext))
-			return 1;
-	}
-
-
-	struct plane_detection_t* plane_detection_ext =
-	    (struct plane_detection_t*)get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME);
-	if (plane_detection_ext->base.supported) {
-		XrPlaneDetectorCreateInfoEXT create_info = {
-		    .type = XR_TYPE_PLANE_DETECTOR_CREATE_INFO_EXT,
-		    .flags = XR_PLANE_DETECTOR_ENABLE_CONTOUR_BIT_EXT,
-		};
-		result = plane_detection_ext->xrCreatePlaneDetectorEXT(app->oxr.session, &create_info,
-		                                                       &plane_detection_ext->pd);
-		if (!xr_check(app->oxr.instance, result, "failed to create plane detector set"))
-			return 1;
-	}
 
 	// Set up rendering (compile shaders, ...) before starting the app->oxr.session
 	if (init_gl(app->oxr.view_count, app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchain_lengths,
@@ -2887,12 +2907,21 @@ main(int argc, char** argv)
 	    .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO,
 	    .next = NULL,
 	    .countActionSets = 1,
-	    .actionSets = &gameplay_actionset};
+	    .actionSets = &app->gameplay_actionset};
 	result = xrAttachSessionActionSets(app->oxr.session, &actionset_attach_info);
 	if (!xr_check(app->oxr.instance, result, "failed to attach action set"))
 		return 1;
 
 	XrEventDataBuffer* runtime_event = NULL;
+
+	// Convenience aliases — these live in app but the loop code predates them.
+	XrPath* hand_paths = app->hand_paths;
+
+	// Extension pointers used throughout the render loop.
+	struct hand_tracking_t* hand_tracking_ext =
+	    (struct hand_tracking_t*)get_ext(app, XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+	struct plane_detection_t* plane_detection_ext =
+	    (struct plane_detection_t*)get_ext(app, XR_EXT_PLANE_DETECTION_EXTENSION_NAME);
 
 	bool quit_renderloop = false;
 	bool session_running = false; // to avoid beginning an already running app->oxr.session
@@ -3133,7 +3162,7 @@ main(int argc, char** argv)
 
 		//! @todo Move this action processing to before xrWaitFrame, probably.
 		const XrActiveActionSet active_actionsets[] = {
-		    {.actionSet = gameplay_actionset, .subactionPath = XR_NULL_PATH}};
+		    {.actionSet = app->gameplay_actionset, .subactionPath = XR_NULL_PATH}};
 
 		XrActionsSyncInfo actions_sync_info = {
 		    .type = XR_TYPE_ACTIONS_SYNC_INFO,
@@ -3502,32 +3531,7 @@ main(int argc, char** argv)
 	if (runtime_event)
 		free(runtime_event);
 
-	for (uint32_t i = 0; i < app->oxr.view_count; i++) {
-		free(app->vr_swapchains[SWAPCHAIN_PROJECTION].images[i]);
-		if (depth_ext->base.supported) {
-			free(app->vr_swapchains[SWAPCHAIN_DEPTH].images[i]);
-		}
-
-		glDeleteFramebuffers(app->vr_swapchains[SWAPCHAIN_PROJECTION].swapchain_lengths[i],
-		                     app->gl_renderer.framebuffers[i]);
-		free(app->gl_renderer.framebuffers[i]);
-	}
-	xrDestroyInstance(app->oxr.instance);
-
-	free(app->oxr.viewconfig_views);
-	free(app->oxr.projection_views);
-	free(app->oxr.views);
-
-	destroy_swapchain(&app->vr_swapchains[SWAPCHAIN_PROJECTION]);
-	destroy_swapchain(&app->vr_swapchains[SWAPCHAIN_DEPTH]);
-	free(app->gl_renderer.framebuffers);
-
-	free(app->acquired_color);
-	free(app->acquired_depth);
-
-	free(depth_ext->infos);
-
-	free(app);
+	cleanup_app(app);
 
 	printf("Cleaned up!\n");
 	return 0;
